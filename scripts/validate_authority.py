@@ -31,3 +31,10 @@ assert environments["deploymentBranches"] == ["main"]
 assert environments["secrets"] == []
 assert len(environments["environments"]) == len(set(environments["environments"]))
 print("GitHub governance declarations are valid")
+
+shadow = (root / ".github/workflows/storage-static-release.yml").read_text()
+assert "options: [probe]" in shadow
+assert "macmini-a1, trusted-audit" in shadow
+assert "https://kube-api.re8ch.com:6443/version" in shadow
+assert "kubectl apply" not in shadow and "kubectl patch" not in shadow
+print("storage shadow probe is read-only")
