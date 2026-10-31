@@ -40,9 +40,15 @@ assert "macmini-a1, trusted-audit" in release
 assert "10.181.22.147:6443" in release
 assert "--tls-server-name=kube-api.re8ch.com" in release
 assert "ExitOnForwardFailure=yes" in release
+assert "--retry-all-errors" in release and "--connect-timeout 10" in release
+assert "jq -er '.value | strings | select(length > 0)'" in release
 assert "operations/releases/ssa_executor.py" in release
 assert "--server-side" not in release  # the bounded executor owns SSA arguments
 assert "kubectl patch configmap" in release
+result_upload = release.split("name: 'main-domain-release-result-${{ github.run_id }}'", 1)[0].rsplit(
+    "- uses: actions/upload-artifact@", 1
+)[1]
+assert "continue-on-error: true" in result_upload
 print("storage release workflow is bounded to reviewed contracts and durable state")
 
 runtime_paths = set(re.findall(

@@ -162,9 +162,10 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$KUBE_API_CA" > "$RUNNER_TEMP/re8ch-ca.crt"
-          curl -fsS --get -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" --data-urlencode "audience=$EXECUTOR_AUDIENCE" \
+          curl -fsS --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 90 \
+            --get -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" --data-urlencode "audience=$EXECUTOR_AUDIENCE" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL" > "$RUNNER_TEMP/oidc.json"
-          token="$(jq -r .value "$RUNNER_TEMP/oidc.json")"; echo "::add-mask::$token"
+          token="$(jq -er '.value | strings | select(length > 0)' "$RUNNER_TEMP/oidc.json")"; echo "::add-mask::$token"
           echo "EXECUTOR_INITIAL_TOKEN_ISSUED_AT=$(date +%s)" >> "$GITHUB_ENV"
           tunnel_port=$((20000 + GITHUB_RUN_ID % 20000))
           tunnel_socket="$RUNNER_TEMP/kube-api-tunnel.sock"
@@ -243,6 +244,7 @@ jobs:
           python -c 'import datetime as dt,json,os; print(json.dumps({"apiVersion":"delivery.re8ch.com/workflow-failure/v1alpha1","outcome":"failed","finishedAt":dt.datetime.now(dt.timezone.utc).isoformat(),"runId":os.environ.get("GITHUB_RUN_ID"),"job":os.environ.get("GITHUB_JOB"),"health":{"status":"unknown","reason":"workflow step failed; inspect this run before trusting older accepted state"}}))' > "$RUNNER_TEMP/workflow-failure.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
+        continue-on-error: true
         with: {name: 'main-domain-release-result-${{ github.run_id }}', path: "${{ runner.temp }}/result.json\n${{ runner.temp }}/workflow-failure.json", retention-days: 30, if-no-files-found: warn}
       - name: Close Kubernetes API tunnel
         if: always()
