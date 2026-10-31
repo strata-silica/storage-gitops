@@ -37,7 +37,9 @@ print("GitHub governance declarations are valid")
 release = (root / ".github/workflows/storage-static-release.yml").read_text()
 assert "inputs.contract" in release and "inputs.execute" in release
 assert "macmini-a1, trusted-audit" in release
-assert "https://kube-api.re8ch.com:6443" in release
+assert "10.181.22.147:6443" in release
+assert "--tls-server-name=kube-api.re8ch.com" in release
+assert "ExitOnForwardFailure=yes" in release
 assert "operations/releases/ssa_executor.py" in release
 assert "--server-side" not in release  # the bounded executor owns SSA arguments
 assert "kubectl patch configmap" in release

@@ -166,9 +166,14 @@ jobs:
             "$ACTIONS_ID_TOKEN_REQUEST_URL" > "$RUNNER_TEMP/oidc.json"
           token="$(jq -r .value "$RUNNER_TEMP/oidc.json")"; echo "::add-mask::$token"
           echo "EXECUTOR_INITIAL_TOKEN_ISSUED_AT=$(date +%s)" >> "$GITHUB_ENV"
+          tunnel_port=$((20000 + GITHUB_RUN_ID % 20000))
+          tunnel_socket="$RUNNER_TEMP/kube-api-tunnel.sock"
+          ssh -M -S "$tunnel_socket" -f -N -o BatchMode=yes -o ExitOnForwardFailure=yes \
+            -L "127.0.0.1:${tunnel_port}:10.181.22.147:6443" r640
+          ssh -S "$tunnel_socket" -O check r640
           kubeconfig="$RUNNER_TEMP/executor.kubeconfig"
-          kubectl config --kubeconfig "$kubeconfig" set-cluster re8ch-main --server=https://kube-api.re8ch.com:6443 \
-            --certificate-authority="$RUNNER_TEMP/re8ch-ca.crt" --embed-certs=true
+          kubectl config --kubeconfig "$kubeconfig" set-cluster re8ch-main --server="https://127.0.0.1:${tunnel_port}" \
+            --tls-server-name=kube-api.re8ch.com --certificate-authority="$RUNNER_TEMP/re8ch-ca.crt" --embed-certs=true
           kubectl config --kubeconfig "$kubeconfig" set-credentials release-executor --token="$token"
           kubectl config --kubeconfig "$kubeconfig" set-context release-executor --cluster=re8ch-main --user=release-executor
           kubectl config --kubeconfig "$kubeconfig" use-context release-executor
@@ -239,3 +244,8 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with: {name: 'main-domain-release-result-${{ github.run_id }}', path: "${{ runner.temp }}/result.json\n${{ runner.temp }}/workflow-failure.json", retention-days: 30, if-no-files-found: warn}
+      - name: Close Kubernetes API tunnel
+        if: always()
+        run: |
+          socket="$RUNNER_TEMP/kube-api-tunnel.sock"
+          if [[ -S "$socket" ]]; then ssh -S "$socket" -O exit r640; fi
