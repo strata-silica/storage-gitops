@@ -1,0 +1,54 @@
+name: storage-static-release
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Bounded storage operation
+        required: true
+        type: choice
+        default: probe
+        options: [probe]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  probe:
+    if: github.ref == 'refs/heads/main' && inputs.operation == 'probe'
+    runs-on: [self-hosted, macOS, ARM64, macmini-a1, trusted-audit]
+    environment: release-executor-data-storage
+    timeout-minutes: 5
+    steps:
+      - name: Acquire exact GitHub OIDC identity and perform read-only API probe
+        env:
+          KUBE_API_CA: '${{ secrets.KUBE_API_CA_PEM }}'
+          EXECUTOR_AUDIENCE: https://kube-api.re8ch.com/release-executor-data-storage
+        run: |
+          set -euo pipefail
+          test -n "$KUBE_API_CA"
+          printf '%s' "$KUBE_API_CA" > "$RUNNER_TEMP/re8ch-ca.crt"
+          response="$RUNNER_TEMP/oidc.json"
+          curl -fsS --get -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            --data-urlencode "audience=$EXECUTOR_AUDIENCE" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL" > "$response"
+          token="$(jq -r .value "$response")"
+          echo "::add-mask::$token"
+          TOKEN="$token" python - <<'PY'
+          import base64, json, os
+          payload = os.environ['TOKEN'].split('.')[1]
+          claims = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+          expected = {
+              'repository': 'strata-silica/storage-gitops',
+              'ref': 'refs/heads/main',
+              'environment': 'release-executor-data-storage',
+              'workflow_ref': 'strata-silica/storage-gitops/.github/workflows/storage-static-release.yml@refs/heads/main',
+              'aud': 'https://kube-api.re8ch.com/release-executor-data-storage',
+          }
+          for key, value in expected.items():
+              if claims.get(key) != value:
+                  raise SystemExit(f'unexpected OIDC {key}')
+          PY
+          curl -fsS --cacert "$RUNNER_TEMP/re8ch-ca.crt" \
+            -H "Authorization: Bearer $token" \
+            https://kube-api.re8ch.com:6443/version > "$RUNNER_TEMP/kube-version.json"
+          jq -e '.gitVersion | startswith("v")' "$RUNNER_TEMP/kube-version.json" >/dev/null
+          echo 'OIDC authentication and read-only Kubernetes version probe succeeded.' >> "$GITHUB_STEP_SUMMARY"
