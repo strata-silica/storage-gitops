@@ -50,6 +50,18 @@ runtime_paths = set(re.findall(
 missing = sorted(path for path in runtime_paths if not (root / path).is_file())
 assert not missing, f"missing storage executor runtime files: {missing}"
 
+release_modules = list((root / "operations/releases").glob("*.py"))
+local_runtime_data = {
+    path.with_name(filename)
+    for path in release_modules
+    for filename in re.findall(r'Path\(__file__\)\.with_name\(["\']([^"\']+)["\']\)', path.read_text())
+}
+missing_local_data = sorted(str(path.relative_to(root)) for path in local_runtime_data if not path.is_file())
+assert not missing_local_data, f"missing storage executor local runtime data: {missing_local_data}"
+for path in local_runtime_data:
+    if path.suffix == ".json":
+        json.loads(path.read_text())
+
 sys.path.insert(0, str(root / "operations/releases"))
 import ssa_executor  # noqa: F401,E402
 print("storage SSA executor runtime imports are complete")
