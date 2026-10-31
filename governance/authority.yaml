@@ -1,0 +1,42 @@
+apiVersion: storage.gitops.pillars.dev/v1alpha1
+kind: StorageAuthority
+metadata:
+  name: re8ch-storage
+spec:
+  phase: inventory
+  runtimeAuthority: kubernetes
+  currentExecutionRepository: re8ch/service-backend
+  destinationRepository: strata-silica/storage-gitops
+  clusterMutationEnabled: false
+  cutoverRequirements:
+    - reviewed-inventory
+    - accepted-digest-parity
+    - exact-oidc-subjects
+    - protected-environments
+    - single-writer-proof
+    - flux-source-handoff
+    - successful-shadow-validation
+  domains:
+    ceph:
+      disposition: migrate
+      currentEnvironments:
+        - release-ceph-compiler
+        - release-executor-ceph-infra
+        - release-executor-ceph-runtime
+    data-storage:
+      disposition: migrate
+      currentEnvironments:
+        - release-executor-data-storage
+        - release-reconciler-data-storage
+      releases:
+        - main-data-storage-cloud-disk
+        - main-data-storage-cluster-bootstrap
+        - main-data-storage-ops
+        - main-data-storage-pigsty-external
+        - main-data-storage-toolhive-system
+    bucket-object-storage:
+      disposition: inventory
+    runtime-anatomy:
+      disposition: split
+      migrate: storage-specific-probes-and-profiles
+      retain: generic-framework-and-cross-domain-probes
