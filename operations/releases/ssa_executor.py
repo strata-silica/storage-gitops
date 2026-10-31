@@ -190,9 +190,23 @@ class Executor:
             return None
         if not request_url or not request_token or not audience:
             raise Rejected("incomplete Actions OIDC refresh configuration")
+        wall_now = int(time.time())
+        initial_issued_at = os.environ.get("EXECUTOR_INITIAL_TOKEN_ISSUED_AT")
+        if not self._kube_token and initial_issued_at:
+            try:
+                issued_at = int(initial_issued_at)
+            except ValueError:
+                raise Rejected("invalid initial Actions OIDC token timestamp") from None
+            if issued_at > wall_now + 60 or issued_at < wall_now - 600:
+                raise Rejected("initial Actions OIDC token timestamp is outside the execution window")
+            if wall_now < issued_at + 180:
+                # kubectl already has this freshly acquired token in KUBECONFIG.
+                return None
         now = time.monotonic()
         if self._kube_token and now < self._kube_token_refresh_at:
             return self._kube_token
+        prior_stage = self.failure_stage
+        self.failure_stage = "oidc-token-refresh"
         endpoint = urllib.parse.urlparse(request_url)
         target = urllib.parse.urlparse(audience)
         if endpoint.scheme != "https" or not endpoint.hostname or not endpoint.hostname.endswith(".actions.githubusercontent.com"):
@@ -213,6 +227,7 @@ class Executor:
             raise Rejected("Actions OIDC endpoint returned no token")
         self._kube_token = token
         self._kube_token_refresh_at = now + 180
+        self.failure_stage = prior_stage
         return token
 
     def command(self, argv: list[str], stdin: str | None = None, timeout: int = 60) -> subprocess.CompletedProcess[str]:
@@ -718,7 +733,7 @@ def cli_failure_result(operation: dict | None, started: str, error_kind: str, fa
     """Preserve this failed invocation even if cluster state cannot be written."""
     finished = dt.datetime.now(dt.timezone.utc).isoformat()
     safe_kind = error_kind if error_kind in {"Rejected", "TimeoutExpired", "FileNotFoundError", "ValueError", "PermissionError"} else "ExecutorError"
-    safe_stages = {"initialization", "runtime-authorization", "request-validation",
+    safe_stages = {"initialization", "runtime-authorization", "request-validation", "oidc-token-refresh",
                    "artifact-signature-verification", "existing-object-binding",
                    "server-side-dry-run", "server-side-apply", "health-check", "prune-and-persist"}
     safe_stage = failure_stage if failure_stage in safe_stages else "unknown-stage"
