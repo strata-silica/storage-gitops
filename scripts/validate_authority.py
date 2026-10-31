@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import json
+import re
 import sys
 
 import yaml
@@ -41,6 +42,13 @@ assert "operations/releases/ssa_executor.py" in release
 assert "--server-side" not in release  # the bounded executor owns SSA arguments
 assert "kubectl patch configmap" in release
 print("storage release workflow is bounded to reviewed contracts and durable state")
+
+runtime_paths = set(re.findall(
+    r"(?:operations/releases/[A-Za-z0-9_./-]+\.py|schemas/[A-Za-z0-9_.-]+\.json)",
+    release + "\n" + "\n".join(path.read_text() for path in (root / "operations/releases").glob("*.py")),
+))
+missing = sorted(path for path in runtime_paths if not (root / path).is_file())
+assert not missing, f"missing storage executor runtime files: {missing}"
 
 sys.path.insert(0, str(root / "operations/releases"))
 import ssa_executor  # noqa: F401,E402
