@@ -4,10 +4,10 @@ Reviewed GitOps authority for RE8CH storage infrastructure.
 
 GitHub authority: `strata-silica/storage-gitops`.
 
-This repository is in the **inventory** phase. It does not currently own or
-apply Kubernetes resources. `re8ch/service-backend` remains the execution
-authority until a reviewed cutover records exact accepted digests, field
-managers, GitHub Environments, OIDC subjects, and Flux source ownership.
+This repository is in the **cutover-approved** phase and owns the bounded
+data-storage release contracts. Cluster mutation remains gated by the
+`release-executor-data-storage` Environment, exact GitHub OIDC claims and the
+contract allowlists. Ceph ownership moves only after data-storage verification.
 
 ## Intended scope
 
