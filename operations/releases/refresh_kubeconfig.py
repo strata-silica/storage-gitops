@@ -19,9 +19,20 @@ def refresh() -> None:
     matches = [entry for entry in config.get('users', []) if entry.get('name') == 'release-executor']
     if len(matches) != 1:
         raise Rejected('expected exactly one release-executor credential')
+    required = ('ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'EXECUTOR_AUDIENCE')
+    if any(not os.environ.get(name) for name in required):
+        raise Rejected('incomplete Actions OIDC refresh configuration')
     token = Executor().actions_kube_token()
+    if token is None:
+        # The executor deliberately returns None while the credential acquired by
+        # the workflow is still fresh. Keep that credential instead of turning a
+        # safe reuse decision into a second, failure-prone OIDC exchange.
+        existing = matches[0].get('user', {}).get('token')
+        if not isinstance(existing, str) or not existing:
+            raise Rejected('fresh Actions OIDC credential is absent from kubeconfig')
+        return
     if not isinstance(token, str) or not token:
-        raise Rejected('Actions OIDC returned no executor credential')
+        raise Rejected('Actions OIDC returned an invalid executor credential')
     matches[0]['user'] = {'token': token}
     descriptor, temporary = tempfile.mkstemp(prefix=path.name + '.', dir=path.parent)
     try:
