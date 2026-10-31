@@ -5,6 +5,10 @@
 This repository has no Kubernetes credentials, protected deployment
 Environments, reconciliation schedule, Flux source, or cluster-writing job.
 Creation of this repository therefore does not change runtime authority.
+Validation uses the enterprise `GitOps R640` runner group with the
+`untrusted-build` label and performs offline checks only. The Sijie Macmini is
+currently registered only to `re8ch/service-backend` and is not assumed to be
+available across organizations.
 
 ## Initial ownership candidates
 
