@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import json
+import sys
 
 import yaml
 
@@ -40,3 +41,7 @@ assert "operations/releases/ssa_executor.py" in release
 assert "--server-side" not in release  # the bounded executor owns SSA arguments
 assert "kubectl patch configmap" in release
 print("storage release workflow is bounded to reviewed contracts and durable state")
+
+sys.path.insert(0, str(root / "operations/releases"))
+import ssa_executor  # noqa: F401,E402
+print("storage SSA executor runtime imports are complete")
