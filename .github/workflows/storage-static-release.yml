@@ -145,11 +145,14 @@ jobs:
         with:
           install-dir: ${{ runner.temp }}/cosign-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
       - run: install -d -m 0700 "$DOCKER_CONFIG"
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: '${{ github.actor }}'
-          password: '${{ secrets.GITHUB_TOKEN }}'
+      - name: Configure isolated registry authentication
+        env:
+          REGISTRY_USER: '${{ github.actor }}'
+          REGISTRY_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+        run: |
+          auth="$(printf '%s' "$REGISTRY_USER:$REGISTRY_TOKEN" | base64 | tr -d '\n')"
+          jq -n --arg auth "$auth" '{auths:{"ghcr.io":{auth:$auth}}}' > "$DOCKER_CONFIG/config.json"
+          chmod 0600 "$DOCKER_CONFIG/config.json"
       - run: python -m pip install --disable-pip-version-check 'PyYAML>=6.0.2' 'jsonschema>=4.23'
       - name: Acquire exact OIDC identity and prove denials
         env:
