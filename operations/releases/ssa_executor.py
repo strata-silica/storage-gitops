@@ -180,6 +180,7 @@ class Executor:
         self.sleeper = sleeper
         self._kube_token: str | None = None
         self._kube_token_refresh_at = 0.0
+        self.failure_stage = "initialization"
 
     def actions_kube_token(self) -> str | None:
         request_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
@@ -539,17 +540,20 @@ class Executor:
                           started: dt.datetime, verify_signature: bool, selected_stages: set[str] | None,
                           finalize: bool, current_bundle_path: Path | None,
                           rollback_stages: set[str]) -> dict:
+        self.failure_stage = "runtime-authorization"
         runtime_only = is_runtime_operation(contract, operation)
         if runtime_only and (finalize or not selected_stages
                 or not selected_stages <= {"runtime", "custom-resources"}
                 or not rollback_stages <= {"runtime"}
                 or operation["action"] not in {"reconcile", "force-reconcile", "rollback"}):
             raise Rejected("Ceph runtime identity requires bounded partial runtime stages")
+        self.failure_stage = "request-validation"
         manifest, objects, request_digest = self.validate(contract, operation, bundle_path, store)
         cached = store.result(operation["operationId"])
         if cached:
             return cached
         if verify_signature:
+            self.failure_stage = "artifact-signature-verification"
             self.verify_signature(operation)
         previous = store.state()
         if operation["action"] == "rollback":
@@ -607,17 +611,20 @@ class Executor:
                 or item["metadata"].get("namespace") != "rook-ceph" for item in selected_objects):
             raise Rejected("Ceph runtime identity cannot apply infrastructure objects")
         if contract["spec"]["authorization"].get("requireExisting", False):
+            self.failure_stage = "existing-object-binding"
             selected_objects = self.with_existing_versions(selected_objects)
             by_identity.update({object_identity(item): item for item in selected_objects})
         if not selected_objects and not finalize:
             raise Rejected("stage selection contains no objects")
         for stage in stages:
             stage_objects = [by_identity[identity] for identity in stage["inventory"]]
+            self.failure_stage = "server-side-dry-run"
             self.apply(stage_objects, manager, dry_run=True, force_objects=requested_force,
                        require_existing=contract["spec"]["authorization"].get("requireExisting", False))
         attempted_inventory, applied_inventory = [], []
         command_timed_out = False
         try:
+            self.failure_stage = "server-side-apply"
             for stage in stages:
                 for identity in stage["inventory"]:
                     attempted_inventory.append(identity)
@@ -625,6 +632,7 @@ class Executor:
                                require_existing=contract["spec"]["authorization"].get("requireExisting", False))
                     applied_inventory.append(identity)
             lifecycle = contract["spec"]["lifecycle"]
+            self.failure_stage = "health-check"
             healthy, reason = self.wait_healthy(
                 selected_objects, lifecycle["healthTimeoutSeconds"], lifecycle.get("healthChecks"))
         except subprocess.TimeoutExpired:
@@ -663,6 +671,7 @@ class Executor:
                 store.accept(blocked)
                 raise Rejected(blocked["blockedReason"]) from error
         elif finalize:
+            self.failure_stage = "prune-and-persist"
             self.prune(previous, set(manifest["inventory"]), contract, manager)
             store.cache_bundle(bundle_path, operation["bundle"]["digest"])
             history = list(previous.get("history", [])) if previous else []
@@ -705,11 +714,15 @@ class Executor:
         return result
 
 
-def cli_failure_result(operation: dict | None, started: str, error_kind: str) -> dict:
+def cli_failure_result(operation: dict | None, started: str, error_kind: str, failure_stage: str) -> dict:
     """Preserve this failed invocation even if cluster state cannot be written."""
     finished = dt.datetime.now(dt.timezone.utc).isoformat()
     safe_kind = error_kind if error_kind in {"Rejected", "TimeoutExpired", "FileNotFoundError", "ValueError", "PermissionError"} else "ExecutorError"
-    reason = "executor aborted; application state unknown (" + safe_kind + ")"
+    safe_stages = {"initialization", "runtime-authorization", "request-validation",
+                   "artifact-signature-verification", "existing-object-binding",
+                   "server-side-dry-run", "server-side-apply", "health-check", "prune-and-persist"}
+    safe_stage = failure_stage if failure_stage in safe_stages else "unknown-stage"
+    reason = f"executor aborted during {safe_stage}; application state unknown ({safe_kind})"
     try:
         validate_schema(operation, "release-operation.schema.json")
     except Exception:
@@ -745,18 +758,19 @@ def main() -> int:
     if args.no_stage_apply and args.partial:
         parser.error("--no-stage-apply cannot be combined with --partial")
     operation = None
+    executor = Executor()
     started = dt.datetime.now(dt.timezone.utc).isoformat()
     try:
         contract = yaml.safe_load(args.contract.read_text())
         operation = json.loads(args.operation.read_text())
         selected_stages = set() if args.no_stage_apply else (set(args.stage) if args.stage else None)
-        result = Executor().reconcile(contract, operation, args.bundle, args.state_dir,
-                                      stages=selected_stages, finalize=not args.partial,
-                                      current_bundle_path=args.current_bundle,
-                                      rollback_stages=set(args.rollback_stage))
+        result = executor.reconcile(contract, operation, args.bundle, args.state_dir,
+                                    stages=selected_stages, finalize=not args.partial,
+                                    current_bundle_path=args.current_bundle,
+                                    rollback_stages=set(args.rollback_stage))
     except Exception as error:
         # Never serialize exception argv, captured streams or rejected input values.
-        result = cli_failure_result(operation, started, type(error).__name__)
+        result = cli_failure_result(operation, started, type(error).__name__, executor.failure_stage)
         print(json.dumps(result, sort_keys=True))
         return 1
     print(json.dumps(result, sort_keys=True))
