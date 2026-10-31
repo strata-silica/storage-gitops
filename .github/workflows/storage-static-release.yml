@@ -134,7 +134,7 @@ jobs:
       # The executor refreshes OIDC tokens during SSA, after the login step.
       EXECUTOR_AUDIENCE: '${{ needs.validate.outputs.audience }}'
       # Never invoke the interactive macOS Keychain credential helper from CI.
-      DOCKER_CONFIG: '${{ runner.temp }}/storage-docker-${{ github.run_id }}-${{ github.run_attempt }}'
+      DOCKER_CONFIG: '/tmp/storage-docker-${{ github.run_id }}-${{ github.run_attempt }}'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: azure/setup-kubectl@c0c8b32d33a5244f1e5947304550403b63930415 # v4
