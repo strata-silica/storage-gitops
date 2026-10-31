@@ -23,11 +23,17 @@ def profiles() -> dict[str, dict]:
     }}}
 
 
+def retired_releases() -> dict[str, dict]:
+    return {}
+
+
 def validate_contract(path: Path) -> dict[str, str]:
     resolved = path.resolve()
     if CONTRACT_ROOT.resolve() not in resolved.parents or resolved.suffix not in {".yaml", ".yml"}:
         raise ValueError("contract must be a YAML file under contracts/releases/main-domain")
     contract = yaml.safe_load(resolved.read_text())
+    if contract["metadata"]["name"] in retired_releases():
+        raise ValueError("release retired from main execution; preserve historical contract and accepted state")
     spec = contract["spec"]
     domain = spec.get("authorityDomain")
     profile = profiles().get(domain)
@@ -35,7 +41,10 @@ def validate_contract(path: Path) -> dict[str, str]:
         raise ValueError(f"unknown or non-bootstrap main domain: {domain!r}")
     execution = profile["execution"]
     if execution["repository"] != "strata-silica/storage-gitops":
-        raise ValueError("data-storage execution authority must remain in strata-silica/storage-gitops")
+        raise ValueError(
+            f"domain execution authority moved to {execution['repository']}; "
+            "dispatch its protected workflow instead"
+        )
     expected = {
         "repository": execution["repository"],
         "workflow": execution["workflow"],
@@ -47,9 +56,13 @@ def validate_contract(path: Path) -> dict[str, str]:
         if spec["provenance"].get(field) != value:
             raise ValueError(f"contract provenance {field} must be {value}")
     name = contract["metadata"]["name"]
+    if str(path) != f"contracts/releases/main-domain/{name}.yaml":
+        raise ValueError("use the canonical contract path so release concurrency cannot be bypassed")
     if not name.startswith(f"main-{domain}-"):
         raise ValueError("contract name does not match authorityDomain")
     return {
+        "release-id": name,
+        "namespace": spec["target"]["namespace"],
         "domain": domain,
         "environment": execution["protectedEnvironment"],
         "audience": execution["audience"],
@@ -58,11 +71,47 @@ def validate_contract(path: Path) -> dict[str, str]:
     }
 
 
+def replay_provenance(contract: dict) -> dict[str, str] | None:
+    if contract["metadata"]["name"] in retired_releases():
+        return None
+    spec = contract["spec"]
+    execution = profiles().get(spec.get("authorityDomain"), {}).get("execution", {})
+    replay = execution.get("replay")
+    if not replay or execution.get("repository") != "re8ch/service-backend":
+        return None
+    original = spec["provenance"]
+    expected = {"repository": execution["repository"], "workflow": execution["workflow"],
+                "environment": execution["protectedEnvironment"], "audience": execution["audience"],
+                "ref": "refs/heads/main"}
+    if any(original.get(key) != value for key, value in expected.items()):
+        return None
+    return {**expected, **{key: replay[key] for key in ("workflow", "environment", "audience")}}
+
+
+def replay_matrix() -> list[dict]:
+    result = []
+    for path in sorted(CONTRACT_ROOT.glob("*.yaml")):
+        contract = yaml.safe_load(path.read_text())
+        replay = replay_provenance(contract)
+        if replay is None:
+            continue
+        relative = path.relative_to(ROOT)
+        profile = validate_contract(relative)
+        result.append({**profile, "contract": str(relative), "environment": replay["environment"],
+                       "audience": replay["audience"]})
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--contract", type=Path, required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--contract", type=Path)
+    inputs.add_argument("--replay-matrix", action="store_true")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
+    if args.replay_matrix:
+        print(json.dumps({"include": replay_matrix()}, separators=(",", ":")))
+        return 0
     result = validate_contract(args.contract)
     if args.github_output:
         with args.github_output.open("a") as output:

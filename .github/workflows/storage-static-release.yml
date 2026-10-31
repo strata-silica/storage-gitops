@@ -3,7 +3,15 @@ on:
   workflow_dispatch:
     inputs:
       contract: {description: Reviewed main-domain ReleaseContract path, type: string, required: true}
+      reuse_digest: {description: Reuse an existing signed digest without rebuilding, type: string, default: ''}
+      reuse_source_commit: {description: Exact certified build commit with identical contract and flat source, type: string, default: ''}
+      reviewed_takeover: {description: Force only the reviewed deployment adoption in this signed contract, type: boolean, default: false}
       execute: {description: Execute through the bounded SSA executor, type: boolean, default: false}
+      mode:
+        description: Publish, reconcile accepted state, or clear a block using a certified existing bundle
+        type: choice
+        options: [publish, reconcile, reset]
+        default: publish
 concurrency:
   group: storage-static-release-${{ inputs.contract }}
   cancel-in-progress: false
@@ -18,14 +26,25 @@ jobs:
       environment: ${{ steps.profile.outputs.environment }}
       audience: ${{ steps.profile.outputs.audience }}
       signer: ${{ steps.profile.outputs.signer }}
+      release-id: ${{ steps.profile.outputs.release-id }}
+      namespace: ${{ steps.profile.outputs.namespace }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: python -m pip install --disable-pip-version-check 'PyYAML>=6.0.2'
+      - name: Validate artifact reuse selection
+        env: {MODE: '${{ inputs.mode }}', REUSE_DIGEST: '${{ inputs.reuse_digest }}', REUSE_SOURCE_COMMIT: '${{ inputs.reuse_source_commit }}'}
+        run: |
+          if [[ "$MODE" == reset ]]; then
+            [[ -n "$REUSE_DIGEST" && -n "$REUSE_SOURCE_COMMIT" ]] || exit 1
+          fi
+          if [[ -n "$REUSE_DIGEST" || -n "$REUSE_SOURCE_COMMIT" ]]; then
+            [[ ( "$MODE" == publish || "$MODE" == reset ) && "$REUSE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$REUSE_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          fi
       - id: profile
         env: {CONTRACT: '${{ inputs.contract }}'}
         run: python operations/releases/main_domain_profile.py --contract "$CONTRACT" --github-output "$GITHUB_OUTPUT"
   compile-sign:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && inputs.mode != 'reconcile'
     needs: validate
     runs-on: [self-hosted, Linux, X64, r640, untrusted-build]
     timeout-minutes: 20
@@ -44,6 +63,8 @@ jobs:
       - uses: fluxcd/flux2/action@dede56a8fdcd1e0edca28630a979a51415bb56f8
         with: {version: '2.9.5'}
       - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+        with:
+          install-dir: ${{ runner.temp }}/cosign-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
@@ -51,7 +72,7 @@ jobs:
           password: '${{ secrets.GITHUB_TOKEN }}'
       - run: python -m pip install --disable-pip-version-check 'PyYAML>=6.0.2' 'jsonschema>=4.23'
       - id: publish
-        env: {CONTRACT: '${{ inputs.contract }}'}
+        env: {CONTRACT: '${{ inputs.contract }}', REUSE_DIGEST: '${{ inputs.reuse_digest }}', REUSE_SOURCE_COMMIT: '${{ inputs.reuse_source_commit }}'}
         run: |
           set -euo pipefail
           case "$CONTRACT" in contracts/releases/main-domain/*.yaml) ;; *) exit 1;; esac
@@ -67,18 +88,27 @@ jobs:
           [[ "${fields[6]}" == .github/workflows/storage-static-release.yml ]]
           [[ "${fields[7]}" == '${{ needs.validate.outputs.domain }}' ]]
           [[ "${fields[8]}" == '${{ needs.validate.outputs.signer }}' ]]
-          kubectl kustomize "${fields[1]}" > "$RUNNER_TEMP/rendered.yaml"
-          python operations/releases/unified_bundle.py --contract "$CONTRACT" --rendered "$RUNNER_TEMP/rendered.yaml" \
-            --output "$RUNNER_TEMP/release.bundle" > "$RUNNER_TEMP/bundle-metadata.json"
-          install -d "$RUNNER_TEMP/oci"; cp "$RUNNER_TEMP/release.bundle" "$RUNNER_TEMP/bundle-metadata.json" "$RUNNER_TEMP/oci/"
           reference="oci://ghcr.io/strata-silica/storage-gitops-release/${fields[2]}"
-          flux push artifact "${reference}:run-${GITHUB_RUN_ID}" --path "$RUNNER_TEMP/oci" --reproducible \
-            --source "https://github.com/${GITHUB_REPOSITORY}" --revision "main@sha1:${GITHUB_SHA}" \
-            --annotations "delivery.re8ch.com/release-id=${fields[2]}" --output json > "$RUNNER_TEMP/oci-result.json"
-          oci_digest="$(jq -r .digest "$RUNNER_TEMP/oci-result.json")"; immutable="${reference#oci://}@${oci_digest}"
-          cosign sign --yes "$immutable"
+          verify_args=()
+          if [[ -n "$REUSE_DIGEST" ]]; then
+            [[ "$REUSE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
+            python operations/releases/verify_reuse_source.py --commit "$REUSE_SOURCE_COMMIT" --contract "$CONTRACT"
+            verify_args+=(--certificate-github-workflow-sha "$REUSE_SOURCE_COMMIT")
+            oci_digest="$REUSE_DIGEST"
+          else
+            kubectl kustomize "${fields[1]}" > "$RUNNER_TEMP/rendered.yaml"
+            python operations/releases/unified_bundle.py --contract "$CONTRACT" --rendered "$RUNNER_TEMP/rendered.yaml" \
+              --output "$RUNNER_TEMP/release.bundle" > "$RUNNER_TEMP/bundle-metadata.json"
+            install -d "$RUNNER_TEMP/oci"; cp "$RUNNER_TEMP/release.bundle" "$RUNNER_TEMP/bundle-metadata.json" "$RUNNER_TEMP/oci/"
+            flux push artifact "${reference}:run-${GITHUB_RUN_ID}" --path "$RUNNER_TEMP/oci" --reproducible \
+              --source "https://github.com/${GITHUB_REPOSITORY}" --revision "main@sha1:${GITHUB_SHA}" \
+              --annotations "delivery.re8ch.com/release-id=${fields[2]}" --output json > "$RUNNER_TEMP/oci-result.json"
+            oci_digest="$(jq -r .digest "$RUNNER_TEMP/oci-result.json")"; immutable="${reference#oci://}@${oci_digest}"
+            cosign sign --yes "$immutable"
+          fi
+          immutable="${reference#oci://}@${oci_digest}"
           cosign verify --certificate-identity '${{ needs.validate.outputs.signer }}' \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$immutable" >/dev/null
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "${verify_args[@]}" "$immutable" >/dev/null
           {
             echo "digest=$oci_digest"
             echo "reference=$reference"
@@ -90,7 +120,11 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with: {name: 'main-domain-release-${{ github.run_id }}', path: main-domain-release-evidence.json, retention-days: 30, if-no-files-found: error}
   execute:
-    if: inputs.execute && github.ref == 'refs/heads/main'
+    if: >-
+      always() && !cancelled() && inputs.execute && github.ref == 'refs/heads/main' &&
+      needs.validate.result == 'success' &&
+      ((inputs.mode == 'reconcile' && needs.compile-sign.result == 'skipped') ||
+      (inputs.mode != 'reconcile' && needs.compile-sign.result == 'success'))
     needs: [validate, compile-sign]
     runs-on: [self-hosted, macOS, ARM64, macmini-a1, trusted-audit]
     timeout-minutes: 15
@@ -106,6 +140,8 @@ jobs:
       - uses: fluxcd/flux2/action@dede56a8fdcd1e0edca28630a979a51415bb56f8
         with: {version: '2.9.5'}
       - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+        with:
+          install-dir: ${{ runner.temp }}/cosign-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
@@ -115,8 +151,8 @@ jobs:
       - name: Acquire exact OIDC identity and prove denials
         env:
           KUBE_API_CA: '${{ secrets.KUBE_API_CA_PEM }}'
-          RELEASE_ID: '${{ needs.compile-sign.outputs.release-id }}'
-          TARGET_NAMESPACE: '${{ needs.compile-sign.outputs.namespace }}'
+          RELEASE_ID: '${{ needs.validate.outputs.release-id }}'
+          TARGET_NAMESPACE: '${{ needs.validate.outputs.namespace }}'
         run: |
           set -euo pipefail
           printf '%s' "$KUBE_API_CA" > "$RUNNER_TEMP/re8ch-ca.crt"
@@ -143,25 +179,56 @@ jobs:
           CONTRACT: '${{ inputs.contract }}'
           OCI_REFERENCE: '${{ needs.compile-sign.outputs.reference }}'
           OCI_DIGEST: '${{ needs.compile-sign.outputs.digest }}'
-          RELEASE_ID: '${{ needs.compile-sign.outputs.release-id }}'
-          TARGET_NAMESPACE: '${{ needs.compile-sign.outputs.namespace }}'
+          RELEASE_ID: '${{ needs.validate.outputs.release-id }}'
+          TARGET_NAMESPACE: '${{ needs.validate.outputs.namespace }}'
+          RELEASE_MODE: '${{ inputs.mode }}'
+          REVIEWED_TAKEOVER: '${{ inputs.reviewed_takeover }}'
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/executor-state"; install -d "$RUNNER_TEMP/pulled" "$root/state" "$root/results/$RELEASE_ID"
+          state_name="$(python operations/releases/operation_materialize.py state-name --release-id "$RELEASE_ID")"
+          kubectl get configmap "$state_name" -n "$TARGET_NAMESPACE" -o json > "$RUNNER_TEMP/state-cm.json"
+          python operations/releases/operation_materialize.py hydrate --configmap "$RUNNER_TEMP/state-cm.json" --state-dir "$root" --release-id "$RELEASE_ID"
+          if [[ "$RELEASE_MODE" == reconcile ]]; then
+            python operations/releases/operation_materialize.py accepted-bundle --configmap "$RUNNER_TEMP/state-cm.json" \
+              --contract "$CONTRACT" > "$RUNNER_TEMP/accepted-bundle.json"
+            OCI_REFERENCE="$(jq -r .reference "$RUNNER_TEMP/accepted-bundle.json")"
+            OCI_DIGEST="$(jq -r .digest "$RUNNER_TEMP/accepted-bundle.json")"
+          fi
           immutable="${OCI_REFERENCE#oci://}@${OCI_DIGEST}"
           cosign verify --certificate-identity '${{ needs.validate.outputs.signer }}' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com "$immutable" >/dev/null
           flux pull artifact "${OCI_REFERENCE}@${OCI_DIGEST}" --output "$RUNNER_TEMP/pulled"
-          state_name="$(python operations/releases/operation_materialize.py state-name --release-id "$RELEASE_ID")"
-          kubectl get configmap "$state_name" -n "$TARGET_NAMESPACE" -o json > "$RUNNER_TEMP/state-cm.json"
-          python operations/releases/operation_materialize.py hydrate --configmap "$RUNNER_TEMP/state-cm.json" --state-dir "$root" --release-id "$RELEASE_ID"
+          takeover_args=(--action reconcile)
+          if [[ "$RELEASE_MODE" == reset ]]; then takeover_args=(--action reset); fi
+          if [[ "$REVIEWED_TAKEOVER" == true ]]; then
+            if [[ "$RELEASE_MODE" != publish ]]; then exit 1; fi
+            case "$RELEASE_ID" in
+              main-data-storage-ops) takeover_object=apps/Deployment/ops/cloudbeaver ;;
+              main-tenant-runtime-ai-operations) takeover_object=apps/Deployment/ai-operations/re8ch-cloud-platform ;;
+              main-tenant-runtime-scheduling-system) takeover_object=apps/Deployment/scheduling-system/penrose-controller ;;
+              *) echo 'No reviewed deployment takeover for this release' >&2; exit 1 ;;
+            esac
+            takeover_args=(--action force-reconcile --force-object "$takeover_object")
+          fi
           python operations/releases/operation_materialize.py request --contract "$CONTRACT" --metadata "$RUNNER_TEMP/pulled/bundle-metadata.json" \
-            --state-dir "$root" --reference "$OCI_REFERENCE" --digest "$OCI_DIGEST" --output "$RUNNER_TEMP/operation.json"
+            --state-dir "$root" --reference "$OCI_REFERENCE" --digest "$OCI_DIGEST" --output "$RUNNER_TEMP/operation.json" "${takeover_args[@]}"
+          executor_status=0
           python operations/releases/ssa_executor.py --contract "$CONTRACT" --operation "$RUNNER_TEMP/operation.json" \
-            --bundle "$RUNNER_TEMP/pulled/release.bundle" --state-dir "$root" > "$RUNNER_TEMP/result.json"
-          jq -n --rawfile state "$root/state/$RELEASE_ID.json" --rawfile result "$RUNNER_TEMP/result.json" \
-            '{data:{"accepted-state.json":$state,"last-result.json":$result}}' > "$RUNNER_TEMP/state-patch.json"
-          kubectl patch configmap "$state_name" -n "$TARGET_NAMESPACE" --type merge --patch-file "$RUNNER_TEMP/state-patch.json"
+            --bundle "$RUNNER_TEMP/pulled/release.bundle" --state-dir "$root" > "$RUNNER_TEMP/result.json" || executor_status=$?
+          python operations/releases/operation_materialize.py state-patch --configmap "$RUNNER_TEMP/state-cm.json" \
+            --state-dir "$root" --release-id "$RELEASE_ID" --result "$RUNNER_TEMP/result.json" --output "$RUNNER_TEMP/state-patch.json"
+          if [[ -s "$RUNNER_TEMP/state-patch.json" ]]; then
+            # The executor refreshes its own token; this outer kubectl still has the initial credential.
+            python operations/releases/refresh_kubeconfig.py
+            kubectl patch configmap "$state_name" -n "$TARGET_NAMESPACE" --type merge --patch-file "$RUNNER_TEMP/state-patch.json"
+          fi
+          if (( executor_status != 0 )); then exit "$executor_status"; fi
+          jq -e '.outcome == "healthy" and .health.status == "healthy"' "$RUNNER_TEMP/result.json" >/dev/null
+      - name: Preserve workflow failure evidence
+        if: failure()
+        run: |
+          python -c 'import datetime as dt,json,os; print(json.dumps({"apiVersion":"delivery.re8ch.com/workflow-failure/v1alpha1","outcome":"failed","finishedAt":dt.datetime.now(dt.timezone.utc).isoformat(),"runId":os.environ.get("GITHUB_RUN_ID"),"job":os.environ.get("GITHUB_JOB"),"health":{"status":"unknown","reason":"workflow step failed; inspect this run before trusting older accepted state"}}))' > "$RUNNER_TEMP/workflow-failure.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
-        with: {name: 'main-domain-release-result-${{ github.run_id }}', path: '${{ runner.temp }}/result.json', retention-days: 30, if-no-files-found: warn}
+        with: {name: 'main-domain-release-result-${{ github.run_id }}', path: "${{ runner.temp }}/result.json\n${{ runner.temp }}/workflow-failure.json", retention-days: 30, if-no-files-found: warn}

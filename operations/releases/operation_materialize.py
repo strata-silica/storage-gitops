@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from unified_bundle import canonical, digest, validate_schema
+from main_domain_profile import replay_provenance
 
 
 def state_configmap_name(release_id: str) -> str:
@@ -31,6 +32,49 @@ def compact(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def replay_state(configmap: Path, contract_path: Path) -> tuple[dict, dict, str]:
+    """Validate and bind durable replay state to its exact contract and target."""
+    contract = yaml.safe_load(contract_path.read_text())
+    validate_schema(contract, "release-contract.schema.json")
+    release_id = contract["metadata"]["name"]
+    cm = json.loads(configmap.read_text())
+    if (cm.get("metadata", {}).get("name") != state_configmap_name(release_id)
+            or cm.get("metadata", {}).get("namespace") != contract["spec"]["target"]["namespace"]):
+        raise ValueError("accepted state ConfigMap does not match the release target")
+    state = json.loads(cm.get("data", {}).get("accepted-state.json", "{}"))
+    validate_schema(state, "release-accepted-state.schema.json")
+    if state["releaseId"] != release_id:
+        raise ValueError("accepted state belongs to another release")
+    expected = f"oci://ghcr.io/re8ch/service-backend-release/{release_id}"
+    if state["bundleReference"] != expected:
+        raise ValueError("accepted bundle is outside the main-domain repository")
+    if state["inventoryDigest"] != contract["spec"]["inventory"]["digest"]:
+        raise ValueError("contract inventory changed; publish a reviewed release instead")
+    return contract, state, expected
+
+
+def replay_decision(configmap: Path, contract_path: Path) -> str:
+    """Classify a fully validated replay without weakening executor preconditions."""
+    _, state, _ = replay_state(configmap, contract_path)
+    if state["blocked"]:
+        return "blocked"
+    if state.get("suspended"):
+        return "suspended"
+    if state.get("healthyDigest") != state["appliedDigest"]:
+        raise ValueError("replay requires a previously healthy accepted digest")
+    return "eligible"
+
+
+def accepted_bundle(configmap: Path, contract_path: Path) -> dict[str, str]:
+    """Resolve a replay from durable acceptance, never from an arbitrary caller URL."""
+    _, state, expected = replay_state(configmap, contract_path)
+    if state["blocked"] or state.get("suspended"):
+        raise ValueError("release is blocked or suspended")
+    if state.get("healthyDigest") != state["appliedDigest"]:
+        raise ValueError("replay requires a previously healthy accepted digest")
+    return {"reference": expected, "digest": state["appliedDigest"]}
+
+
 def hydrate(configmap: Path, state_dir: Path, release_id: str) -> None:
     data = json.loads(configmap.read_text()).get("data", {})
     (state_dir / "state").mkdir(parents=True, exist_ok=True)
@@ -46,7 +90,7 @@ def hydrate(configmap: Path, state_dir: Path, release_id: str) -> None:
 
 
 def request(contract_path: Path, metadata_path: Path, state_dir: Path, reference: str,
-            oci_digest: str, output: Path, action: str = "reconcile", force_objects: list[str] | None = None) -> None:
+            oci_digest: str, output: Path, action: str = "reconcile", force_objects: list[str] | None = None, replay_only: bool = False) -> None:
     contract = yaml.safe_load(contract_path.read_text())
     validate_schema(contract, "release-contract.schema.json")
     metadata = json.loads(metadata_path.read_text())
@@ -72,6 +116,11 @@ def request(contract_path: Path, metadata_path: Path, state_dir: Path, reference
         "nonce": secrets.token_hex(16),
         "idempotencyKey": secrets.token_hex(16),
     }
+    if replay_only:
+        replay = replay_provenance(contract)
+        if replay is None or action != "reconcile" or force_objects:
+            raise ValueError("only accepted reconcile is authorized for the replay identity")
+        operation["github"].update({key: replay[key] for key in ("workflow", "environment", "audience")})
     if state:
         operation["previousApprovedDigest"] = state["appliedDigest"]
     if force_objects:
@@ -93,6 +142,35 @@ def persist(state_dir: Path, release_id: str, result_path: Path, output: Path) -
     }))
 
 
+def state_patch(configmap: Path, state_dir: Path, release_id: str, result_path: Path, output: Path) -> None:
+    """Persist changed state even after failure, without overwriting concurrent edits."""
+    cm = json.loads(configmap.read_text())
+    metadata = cm.get("metadata", {})
+    if metadata.get("name") != state_configmap_name(release_id) or not metadata.get("resourceVersion"):
+        raise ValueError("state patch requires the original release ConfigMap and resourceVersion")
+    state_path = state_dir / "state" / f"{release_id}.json"
+    original = cm.get("data", {})
+    changed = {}
+    if state_path.exists():
+        state = json.loads(state_path.read_text())
+        validate_schema(state, "release-accepted-state.schema.json")
+        if state["releaseId"] != release_id:
+            raise ValueError("state patch belongs to another release")
+        if state != json.loads(original.get("accepted-state.json", "{}")):
+            changed["accepted-state.json"] = compact(state)
+    if result_path.exists() and result_path.stat().st_size:
+        result = json.loads(result_path.read_text())
+        validate_schema(result, "release-operation-result.schema.json")
+        if result["releaseId"] != release_id:
+            raise ValueError("result belongs to another release")
+        if result != json.loads(original.get("last-result.json", "{}")):
+            changed["last-result.json"] = compact(result)
+    if changed:
+        output.write_text(compact({"metadata": {"resourceVersion": metadata["resourceVersion"]}, "data": changed}))
+    else:
+        output.unlink(missing_ok=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -105,15 +183,31 @@ def main() -> int:
     make.add_argument("--digest", required=True); make.add_argument("--output", type=Path, required=True)
     make.add_argument("--action", choices=["reconcile", "force-reconcile", "reset", "suspend", "resume", "rollback"], default="reconcile")
     make.add_argument("--force-object", action="append", default=[])
+    make.add_argument("--replay-only", action="store_true")
     save = sub.add_parser("persist")
     save.add_argument("--state-dir", type=Path, required=True); save.add_argument("--release-id", required=True)
     save.add_argument("--result", type=Path, required=True); save.add_argument("--output", type=Path, required=True)
     state_name = sub.add_parser("state-name")
     state_name.add_argument("--release-id", required=True)
+    accepted = sub.add_parser("accepted-bundle")
+    accepted.add_argument("--configmap", type=Path, required=True)
+    accepted.add_argument("--contract", type=Path, required=True)
+    decision = sub.add_parser("replay-decision")
+    decision.add_argument("--configmap", type=Path, required=True)
+    decision.add_argument("--contract", type=Path, required=True)
+    patch = sub.add_parser("state-patch")
+    patch.add_argument("--configmap", type=Path, required=True)
+    patch.add_argument("--state-dir", type=Path, required=True)
+    patch.add_argument("--release-id", required=True)
+    patch.add_argument("--result", type=Path, required=True)
+    patch.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "hydrate": hydrate(args.configmap, args.state_dir, args.release_id)
-    elif args.command == "request": request(args.contract, args.metadata, args.state_dir, args.reference, args.digest, args.output, args.action, args.force_object)
+    elif args.command == "request": request(args.contract, args.metadata, args.state_dir, args.reference, args.digest, args.output, args.action, args.force_object, args.replay_only)
     elif args.command == "persist": persist(args.state_dir, args.release_id, args.result, args.output)
+    elif args.command == "accepted-bundle": print(compact(accepted_bundle(args.configmap, args.contract)))
+    elif args.command == "replay-decision": print(replay_decision(args.configmap, args.contract))
+    elif args.command == "state-patch": state_patch(args.configmap, args.state_dir, args.release_id, args.result, args.output)
     else: print(state_configmap_name(args.release_id))
     return 0
 
