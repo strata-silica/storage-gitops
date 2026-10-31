@@ -181,6 +181,7 @@ class Executor:
         self._kube_token: str | None = None
         self._kube_token_refresh_at = 0.0
         self.failure_stage = "initialization"
+        self.failure_detail = "unspecified"
 
     def actions_kube_token(self) -> str | None:
         request_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
@@ -243,6 +244,20 @@ class Executor:
             raise subprocess.TimeoutExpired([effective[0]] if effective else [], error.timeout) from None
         if result.returncode:
             message = (result.stderr or result.stdout or "command failed")[-2048:]
+            lowered = message.lower()
+            if "admission webhook" in lowered or "denied the request" in lowered:
+                self.failure_detail = "admission-denied"
+            elif "forbidden" in lowered or "status code 403" in lowered:
+                self.failure_detail = "authorization-denied"
+            elif "conflict" in lowered:
+                self.failure_detail = "field-conflict"
+            elif any(value in lowered for value in ("i/o timeout", "tls handshake timeout", "context deadline exceeded",
+                                                     "connection reset", "connection refused", "unexpected eof")):
+                self.failure_detail = "transport-or-api-timeout"
+            elif "not found" in lowered or "notfound" in lowered:
+                self.failure_detail = "resource-not-found"
+            else:
+                self.failure_detail = "command-rejected"
             raise Rejected(message)
         return result
 
@@ -729,7 +744,8 @@ class Executor:
         return result
 
 
-def cli_failure_result(operation: dict | None, started: str, error_kind: str, failure_stage: str) -> dict:
+def cli_failure_result(operation: dict | None, started: str, error_kind: str,
+                       failure_stage: str, failure_detail: str) -> dict:
     """Preserve this failed invocation even if cluster state cannot be written."""
     finished = dt.datetime.now(dt.timezone.utc).isoformat()
     safe_kind = error_kind if error_kind in {"Rejected", "TimeoutExpired", "FileNotFoundError", "ValueError", "PermissionError"} else "ExecutorError"
@@ -737,7 +753,10 @@ def cli_failure_result(operation: dict | None, started: str, error_kind: str, fa
                    "artifact-signature-verification", "existing-object-binding",
                    "server-side-dry-run", "server-side-apply", "health-check", "prune-and-persist"}
     safe_stage = failure_stage if failure_stage in safe_stages else "unknown-stage"
-    reason = f"executor aborted during {safe_stage}; application state unknown ({safe_kind})"
+    safe_details = {"unspecified", "admission-denied", "authorization-denied", "field-conflict",
+                    "transport-or-api-timeout", "resource-not-found", "command-rejected"}
+    safe_detail = failure_detail if failure_detail in safe_details else "unspecified"
+    reason = f"executor aborted during {safe_stage} [{safe_detail}]; application state unknown ({safe_kind})"
     try:
         validate_schema(operation, "release-operation.schema.json")
     except Exception:
@@ -785,7 +804,8 @@ def main() -> int:
                                     rollback_stages=set(args.rollback_stage))
     except Exception as error:
         # Never serialize exception argv, captured streams or rejected input values.
-        result = cli_failure_result(operation, started, type(error).__name__, executor.failure_stage)
+        result = cli_failure_result(operation, started, type(error).__name__,
+                                    executor.failure_stage, executor.failure_detail)
         print(json.dumps(result, sort_keys=True))
         return 1
     print(json.dumps(result, sort_keys=True))
