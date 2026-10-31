@@ -26,12 +26,37 @@ from typing import Callable
 
 import yaml
 
+from main_domain_profile import profiles, replay_provenance
+from ceph_execution_profile import is_runtime_operation
 from unified_bundle import canonical, digest, object_identity, validate_schema
+from existing_objects import bind_existing, ExistingObjectError, resource_version_conflict
 
 PROTECTED_KINDS = {"Namespace", "CustomResourceDefinition", "PersistentVolume", "PersistentVolumeClaim", "StorageClass",
                    "CephCluster", "CephFilesystem", "CephBlockPool", "CephFilesystemSubVolumeGroup"}
 READY_KINDS = {"Deployment", "StatefulSet", "DaemonSet", "Job"}
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+CONTRACT_MIGRATIONS = Path(__file__).with_name("accepted-contract-migrations.json")
+
+
+def accepted_contract_migration(contract_digest: str, manifest: dict, operation: dict, state: dict | None) -> bool:
+    """Replay only a reviewed binding transition for an already accepted artifact."""
+    if operation["action"] != "reconcile" or not state:
+        return False
+    policy = json.loads(CONTRACT_MIGRATIONS.read_text())
+    approved = policy.get(operation["releaseId"])
+    if not approved:
+        return False
+    bundle = operation["bundle"]
+    return (
+        approved == {"fromContractDigest": manifest["contractDigest"],
+                     "toContractDigest": contract_digest,
+                     "bundleReference": bundle["reference"], "bundleDigest": bundle["digest"]}
+        and state.get("releaseId") == operation["releaseId"]
+        and state.get("bundleReference") == bundle["reference"]
+        and state.get("appliedDigest") == state.get("healthyDigest") == bundle["digest"]
+        and state.get("payloadDigest") == bundle["payloadDigest"]
+        and not state.get("blocked") and not state.get("suspended")
+    )
 
 
 class Rejected(RuntimeError):
@@ -171,7 +196,9 @@ class Executor:
         target = urllib.parse.urlparse(audience)
         if endpoint.scheme != "https" or not endpoint.hostname or not endpoint.hostname.endswith(".actions.githubusercontent.com"):
             raise Rejected("unexpected Actions OIDC endpoint")
-        if target.scheme != "https" or target.hostname != "kube-api.re8ch.com" or not target.path.startswith("/release-executor-"):
+        replay_audiences = {item.get("execution", {}).get("replay", {}).get("audience") for item in profiles().values()}
+        if (target.scheme != "https" or target.hostname != "kube-api.re8ch.com"
+                or not (target.path.startswith("/release-executor-") or audience in replay_audiences)):
             raise Rejected("unexpected executor audience")
         separator = "&" if "?" in request_url else "?"
         url = request_url + separator + urllib.parse.urlencode({"audience": audience})
@@ -193,7 +220,11 @@ class Executor:
             token = self.actions_kube_token()
             if token:
                 effective.insert(1, "--token=" + token)
-        result = self.runner(effective, input=stdin, text=True, capture_output=True, timeout=timeout, check=False)
+        try:
+            result = self.runner(effective, input=stdin, text=True, capture_output=True, timeout=timeout, check=False)
+        except subprocess.TimeoutExpired as error:
+            # OIDC tokens may occur in argv; preserve type without exception payload.
+            raise subprocess.TimeoutExpired([effective[0]] if effective else [], error.timeout) from None
         if result.returncode:
             message = (result.stderr or result.stdout or "command failed")[-2048:]
             raise Rejected(message)
@@ -212,8 +243,12 @@ class Executor:
                 raise Rejected("operation ID was reused with different content")
             return {}, [], request_digest
         state = store.state()
-        if state and state.get("blocked"):
+        if state and state.get("blocked") and operation["action"] != "reset":
             raise Rejected(f"release is blocked: {state.get('blockedReason', 'manual recovery required')}")
+        if state and state.get("suspended") and operation["action"] not in {"suspend", "resume", "reset"}:
+            raise Rejected("release is suspended; resume before reconciliation")
+        if operation["action"] == "reset" and operation.get("forceConflictObjects"):
+            raise Rejected("reset cannot request force conflicts")
         expected_sequence = 1 if state is None else state["sequence"] + 1
         if operation["sequence"] != expected_sequence:
             raise Rejected(f"out-of-order operation: expected sequence {expected_sequence}")
@@ -227,9 +262,27 @@ class Executor:
             raise Rejected("contract digest mismatch")
         provenance = contract["spec"]["provenance"]
         github = operation["github"]
-        for key in ("repository", "workflow", "ref", "environment", "audience"):
-            if github[key] != provenance[key]:
-                raise Rejected(f"GitHub {key} is not authorized")
+        if os.environ.get("EXECUTOR_AUDIENCE") and os.environ["EXECUTOR_AUDIENCE"] != github["audience"]:
+            raise Rejected("operation audience differs from the actual OIDC execution audience")
+        github_fields = ("repository", "workflow", "ref", "environment", "audience")
+        publisher = all(github[key] == provenance[key] for key in github_fields)
+        replay = replay_provenance(contract)
+        replay_only = not publisher and replay is not None and all(github[key] == replay[key] for key in github_fields)
+        if not publisher and not replay_only and not is_runtime_operation(contract, operation):
+            mismatch = next(key for key in github_fields if github[key] != provenance[key])
+            raise Rejected(f"GitHub {mismatch} is not authorized")
+        if replay_only:
+            if operation["action"] != "reconcile" or operation.get("forceConflictObjects"):
+                raise Rejected("replay identity permits only unforced reconcile")
+            if not state or state.get("releaseId") != operation["releaseId"] or state.get("healthyDigest") != state.get("appliedDigest"):
+                raise Rejected("replay identity requires healthy accepted state")
+            expected = f"oci://ghcr.io/re8ch/service-backend-release/{operation['releaseId']}"
+            if (state["bundleReference"] != expected or operation["bundle"]["reference"] != expected
+                    or operation["bundle"]["digest"] != state["appliedDigest"]
+                    or operation["bundle"]["payloadDigest"] != state["payloadDigest"]
+                    or operation["inventoryDigest"] != state["inventoryDigest"]
+                    or state["inventoryDigest"] != contract["spec"]["inventory"]["digest"]):
+                raise Rejected("replay identity cannot change the accepted artifact or inventory")
         for key in ("signer", "issuer"):
             if operation["bundle"][key] != provenance[key]:
                 raise Rejected(f"bundle {key} is not authorized")
@@ -240,7 +293,10 @@ class Executor:
         manifest, objects = load_archive(bundle_path)
         if manifest["releaseId"] != operation["releaseId"]:
             raise Rejected("bundle is bound to another release")
-        if operation["action"] != "rollback" and manifest["contractDigest"] != contract_digest:
+        if replay_only and manifest["contractDigest"] != contract_digest:
+            raise Rejected("replay identity cannot migrate the accepted contract; publish first")
+        if (operation["action"] != "rollback" and manifest["contractDigest"] != contract_digest
+                and not accepted_contract_migration(contract_digest, manifest, operation, state)):
             raise Rejected("bundle is bound to another contract")
         if manifest["inventoryDigest"] != operation["inventoryDigest"]:
             raise Rejected("operation inventory differs from bundle")
@@ -255,16 +311,24 @@ class Executor:
                       "--certificate-oidc-issuer", bundle["issuer"], reference], timeout=120)
 
     @staticmethod
-    def with_audit(objects: list[dict], operation: dict) -> list[dict]:
+    def with_audit(objects: list[dict], operation: dict, *, artifact_digest: str | None = None) -> list[dict]:
+        # Per-attempt IDs belong in durable state/results, not replayed object metadata.
         annotated = json.loads(json.dumps(objects))
         for item in annotated:
             annotations = item.setdefault("metadata", {}).setdefault("annotations", {})
             annotations["delivery.re8ch.com/release-id"] = operation["releaseId"]
-            annotations["delivery.re8ch.com/operation-id"] = operation["operationId"]
+            annotations.pop("delivery.re8ch.com/operation-id", None)
+            annotations["delivery.re8ch.com/artifact-digest"] = artifact_digest or operation["bundle"]["digest"]
         return annotated
 
+    def with_existing_versions(self, objects: list[dict]) -> list[dict]:
+        try:
+            return bind_existing(objects, self.command)
+        except ExistingObjectError as error:
+            raise Rejected(str(error)) from None
+
     def apply(self, objects: list[dict], field_manager: str, dry_run: bool,
-              force_objects: set[str] | None = None) -> None:
+              force_objects: set[str] | None = None, require_existing: bool = False) -> None:
         for item in objects:
             argv = ["kubectl", "apply", "--server-side", f"--field-manager={field_manager}"]
             if object_identity(item) in (force_objects or set()):
@@ -272,7 +336,14 @@ class Executor:
             if dry_run:
                 argv.append("--dry-run=server")
             argv += ["-f", "-"]
-            self.command(argv, json.dumps(item), timeout=120)
+            for attempt in range(3 if require_existing else 1):
+                current = self.with_existing_versions([item])[0] if require_existing else item
+                try:
+                    self.command(argv, json.dumps(current), timeout=120)
+                    break
+                except Rejected as error:
+                    if not require_existing or attempt == 2 or not resource_version_conflict(str(error)):
+                        raise
 
     @staticmethod
     def pointer(value: object, pointer: str) -> object:
@@ -377,12 +448,20 @@ class Executor:
                     raise Rejected("rollback bundle payload is unavailable or has the wrong digest")
                 store.cache_bundle(fetched, rollback_digest)
         _, rollback_objects = load_archive(rollback_path)
-        rollback_objects = self.with_audit(rollback_objects, operation)
+        rollback_objects = self.with_audit(rollback_objects, operation, artifact_digest=rollback_digest)
+        if contract["spec"]["authorization"].get("requireExisting", False):
+            initial_uids = {object_identity(item): item["metadata"].get("uid") for item in attempted_objects}
+            for item in rollback_objects:
+                identity = object_identity(item)
+                if not initial_uids.get(identity):
+                    raise Rejected(f"rollback object was not bound in this adoption attempt: {identity}")
+                item["metadata"]["uid"] = initial_uids[identity]
+            rollback_objects = self.with_existing_versions(rollback_objects)
         manual = set(contract["spec"]["lifecycle"].get("manualRollbackKinds", []))
         if any(item["kind"] in manual or item["kind"] in PROTECTED_KINDS for item in attempted_objects):
             raise Rejected("manual rollback approval required for protected Ceph/schema objects")
-        self.apply(rollback_objects, manager, dry_run=True)
-        self.apply(rollback_objects, manager, dry_run=False)
+        self.apply(rollback_objects, manager, dry_run=True, require_existing=contract["spec"]["authorization"].get("requireExisting", False))
+        self.apply(rollback_objects, manager, dry_run=False, require_existing=contract["spec"]["authorization"].get("requireExisting", False))
         attempted_state = {
             "inventory": attempted_manifest["inventory"],
             "objectRefs": [object_ref(item) for item in attempted_objects],
@@ -460,6 +539,12 @@ class Executor:
                           started: dt.datetime, verify_signature: bool, selected_stages: set[str] | None,
                           finalize: bool, current_bundle_path: Path | None,
                           rollback_stages: set[str]) -> dict:
+        runtime_only = is_runtime_operation(contract, operation)
+        if runtime_only and (finalize or not selected_stages
+                or not selected_stages <= {"runtime", "custom-resources"}
+                or not rollback_stages <= {"runtime"}
+                or operation["action"] not in {"reconcile", "force-reconcile", "rollback"}):
+            raise Rejected("Ceph runtime identity requires bounded partial runtime stages")
         manifest, objects, request_digest = self.validate(contract, operation, bundle_path, store)
         cached = store.result(operation["operationId"])
         if cached:
@@ -517,27 +602,58 @@ class Executor:
                 raise Rejected(f"unknown bundle stages: {sorted(unknown)}")
             stages = [stage for stage in stages if stage["name"] in selected_stages]
         selected_objects = [by_identity[identity] for stage in stages for identity in stage["inventory"]]
+        if runtime_only and any(
+                item["apiVersion"].split("/")[0] in {"rbac.authorization.k8s.io", "apiextensions.k8s.io"}
+                or item["metadata"].get("namespace") != "rook-ceph" for item in selected_objects):
+            raise Rejected("Ceph runtime identity cannot apply infrastructure objects")
+        if contract["spec"]["authorization"].get("requireExisting", False):
+            selected_objects = self.with_existing_versions(selected_objects)
+            by_identity.update({object_identity(item): item for item in selected_objects})
         if not selected_objects and not finalize:
             raise Rejected("stage selection contains no objects")
         for stage in stages:
             stage_objects = [by_identity[identity] for identity in stage["inventory"]]
-            self.apply(stage_objects, manager, dry_run=True, force_objects=requested_force)
+            self.apply(stage_objects, manager, dry_run=True, force_objects=requested_force,
+                       require_existing=contract["spec"]["authorization"].get("requireExisting", False))
+        attempted_inventory, applied_inventory = [], []
+        command_timed_out = False
         try:
             for stage in stages:
-                stage_objects = [by_identity[identity] for identity in stage["inventory"]]
-                self.apply(stage_objects, manager, dry_run=False, force_objects=requested_force)
+                for identity in stage["inventory"]:
+                    attempted_inventory.append(identity)
+                    self.apply([by_identity[identity]], manager, dry_run=False, force_objects=requested_force,
+                               require_existing=contract["spec"]["authorization"].get("requireExisting", False))
+                    applied_inventory.append(identity)
             lifecycle = contract["spec"]["lifecycle"]
             healthy, reason = self.wait_healthy(
                 selected_objects, lifecycle["healthTimeoutSeconds"], lifecycle.get("healthChecks"))
+        except subprocess.TimeoutExpired:
+            command_timed_out = True
+            healthy, reason = False, "Kubernetes command timed out; write or health outcome unknown"
         except Rejected as error:
             healthy, reason = False, f"apply failed: {error}"
         outcome = "healthy"
         rollback_digest = None
         if not healthy:
+            if not previous:
+                complete = not command_timed_out and set(applied_inventory) == set(manifest["inventory"])
+                result = {
+                    "apiVersion": "delivery.re8ch.com/release-result/v1alpha1",
+                    "operationId": operation["operationId"], "releaseId": operation["releaseId"],
+                    "requestDigest": request_digest, "approvedDigest": operation["bundle"]["digest"],
+                    "observedDigest": operation["bundle"]["digest"] if complete else None,
+                    "inventoryDigest": manifest["inventoryDigest"], "startedAt": started.isoformat(),
+                    "finishedAt": self.now().isoformat(), "outcome": "failed",
+                    "health": {"status": "unknown" if command_timed_out else "unhealthy", "reason": ("no accepted rollback bundle; " + reason)[:512]},
+                    "application": {"status": "complete" if complete else "partial-or-unknown",
+                                    "attemptedInventory": sorted(set(attempted_inventory)),
+                                    "appliedInventory": sorted(set(applied_inventory))},
+                }
+                validate_schema(result, "release-operation-result.schema.json")
+                store.save_result(result)
+                return result
             if not finalize:
                 raise Rejected(f"partial stage health failed: {reason}")
-            if not previous:
-                raise Rejected("health failed and no accepted rollback bundle exists")
             try:
                 rollback_digest, reason = self.rollback(
                     previous, manifest, selected_objects, contract, operation, manager, store, reason)
@@ -589,6 +705,28 @@ class Executor:
         return result
 
 
+def cli_failure_result(operation: dict | None, started: str, error_kind: str) -> dict:
+    """Preserve this failed invocation even if cluster state cannot be written."""
+    finished = dt.datetime.now(dt.timezone.utc).isoformat()
+    safe_kind = error_kind if error_kind in {"Rejected", "TimeoutExpired", "FileNotFoundError", "ValueError", "PermissionError"} else "ExecutorError"
+    reason = "executor aborted; application state unknown (" + safe_kind + ")"
+    try:
+        validate_schema(operation, "release-operation.schema.json")
+    except Exception:
+        return {"apiVersion": "delivery.re8ch.com/workflow-failure/v1alpha1",
+                "outcome": "failed", "startedAt": started, "finishedAt": finished,
+                "health": {"status": "unknown", "reason": reason}}
+    result = {"apiVersion": "delivery.re8ch.com/release-result/v1alpha1",
+              "operationId": operation["operationId"], "releaseId": operation["releaseId"],
+              "requestDigest": digest(canonical(operation)), "approvedDigest": operation["bundle"]["digest"],
+              "observedDigest": None, "inventoryDigest": operation["inventoryDigest"],
+              "startedAt": started, "finishedAt": finished, "outcome": "failed",
+              "health": {"status": "unknown", "reason": reason},
+              "application": {"status": "partial-or-unknown", "attemptedInventory": [], "appliedInventory": []}}
+    validate_schema(result, "release-operation-result.schema.json")
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--contract", type=Path, required=True)
@@ -606,15 +744,23 @@ def main() -> int:
         parser.error("--no-stage-apply cannot be combined with --stage")
     if args.no_stage_apply and args.partial:
         parser.error("--no-stage-apply cannot be combined with --partial")
-    contract = yaml.safe_load(args.contract.read_text())
-    operation = json.loads(args.operation.read_text())
-    selected_stages = set() if args.no_stage_apply else (set(args.stage) if args.stage else None)
-    result = Executor().reconcile(contract, operation, args.bundle, args.state_dir,
-                                  stages=selected_stages, finalize=not args.partial,
-                                  current_bundle_path=args.current_bundle,
-                                  rollback_stages=set(args.rollback_stage))
+    operation = None
+    started = dt.datetime.now(dt.timezone.utc).isoformat()
+    try:
+        contract = yaml.safe_load(args.contract.read_text())
+        operation = json.loads(args.operation.read_text())
+        selected_stages = set() if args.no_stage_apply else (set(args.stage) if args.stage else None)
+        result = Executor().reconcile(contract, operation, args.bundle, args.state_dir,
+                                      stages=selected_stages, finalize=not args.partial,
+                                      current_bundle_path=args.current_bundle,
+                                      rollback_stages=set(args.rollback_stage))
+    except Exception as error:
+        # Never serialize exception argv, captured streams or rejected input values.
+        result = cli_failure_result(operation, started, type(error).__name__)
+        print(json.dumps(result, sort_keys=True))
+        return 1
     print(json.dumps(result, sort_keys=True))
-    return 0
+    return 1 if result.get("outcome") == "failed" else 0
 
 
 if __name__ == "__main__":
