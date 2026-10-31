@@ -32,9 +32,11 @@ assert environments["secrets"] == []
 assert len(environments["environments"]) == len(set(environments["environments"]))
 print("GitHub governance declarations are valid")
 
-shadow = (root / ".github/workflows/storage-static-release.yml").read_text()
-assert "options: [probe]" in shadow
-assert "macmini-a1, trusted-audit" in shadow
-assert "https://kube-api.re8ch.com:6443/version" in shadow
-assert "kubectl apply" not in shadow and "kubectl patch" not in shadow
-print("storage shadow probe is read-only")
+release = (root / ".github/workflows/storage-static-release.yml").read_text()
+assert "inputs.contract" in release and "inputs.execute" in release
+assert "macmini-a1, trusted-audit" in release
+assert "https://kube-api.re8ch.com:6443" in release
+assert "operations/releases/ssa_executor.py" in release
+assert "--server-side" not in release  # the bounded executor owns SSA arguments
+assert "kubectl patch configmap" in release
+print("storage release workflow is bounded to reviewed contracts and durable state")

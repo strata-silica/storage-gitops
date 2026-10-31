@@ -2,13 +2,10 @@
 
 ## Safety state
 
-This repository has no Kubernetes credentials, protected deployment
-Environments, reconciliation schedule, Flux source, or cluster-writing job.
-Creation of this repository therefore does not change runtime authority.
-Validation uses the enterprise `GitOps R640` runner group with the
-`untrusted-build` label and performs offline checks only. The Sijie Macmini is
-currently registered only to `re8ch/service-backend` and is not assumed to be
-available across organizations.
+The data-storage executor uses the protected `release-executor-data-storage`
+Environment and exact GitHub OIDC identity. Validation and compilation use the
+enterprise R640 pool; bounded SSA execution uses the Sijie Macmini trusted-audit
+runner. Secret values remain only in GitHub Environments.
 
 ## Initial ownership candidates
 

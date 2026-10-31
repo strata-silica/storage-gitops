@@ -3,11 +3,11 @@ kind: StorageAuthority
 metadata:
   name: re8ch-storage
 spec:
-  phase: inventory
+  phase: cutover-approved
   runtimeAuthority: kubernetes
-  currentExecutionRepository: re8ch/service-backend
+  currentExecutionRepository: strata-silica/storage-gitops
   destinationRepository: strata-silica/storage-gitops
-  clusterMutationEnabled: false
+  clusterMutationEnabled: true
   cutoverRequirements:
     - reviewed-inventory
     - accepted-digest-parity
