@@ -1,0 +1,15 @@
+apiVersion: storage.gitops.pillars.dev/v1alpha1
+kind: GitHubEnvironmentSet
+metadata:
+  name: storage-delivery
+spec:
+  deploymentBranches: [main]
+  preventSelfReview: false
+  requiredReviewers: [Woomou]
+  secrets: []
+  environments:
+    - release-ceph-compiler
+    - release-executor-ceph-infra
+    - release-executor-ceph-runtime
+    - release-executor-data-storage
+    - release-reconciler-data-storage

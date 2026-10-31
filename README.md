@@ -23,3 +23,7 @@ in `re8ch/service-backend`.
 See [docs/migration-inventory.md](docs/migration-inventory.md) for the staged
 handoff and [governance/authority.yaml](governance/authority.yaml) for the
 machine-readable ownership boundary.
+
+GitHub-native governance is declared under `governance/github/`. Effective
+repository settings must be applied with `gh api` after review and read back
+from GitHub; committing the declarations alone does not enforce them.
