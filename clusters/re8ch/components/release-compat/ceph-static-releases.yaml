@@ -12,7 +12,7 @@ spec:
   renderer: helm
   targetCluster: re8ch
   targetNamespace: rook-ceph
-  contractDigest: sha256:d0c8ac9b74d3b62df81c29bbc241c5ab9d42ed12d8c0af2808f4ae9fb9879296
+  contractDigest: sha256:83f38c4b2405a334fbb9e1a802905170e207049c52ccc81c92620b69c0cf465c
   chartDigest: sha256:95bd3966bcf36b383b88e1996132642057e8fe4bc133b9681092c4ddec4dd0b2
   valuesDigest: sha256:e33cbbcaf8b86acc8be5c3b6fb6639276b99f18126249e8bc13531128089d563
   bundleRepository: oci://registry.re8ch.com/functions-shared/ceph-release-rook-ceph
@@ -22,7 +22,7 @@ spec:
   - cluster-rbac
   - runtime
   - health-acceptance
-  bundleDigest: sha256:3c7f536d6f9e5dc799a97998c7e4643b65853f796917748753338d4e990f1856
+  bundleDigest: sha256:41acfbbc7e0a767ca476fe837e1bc72e0cedb98a5804d792c7660a2d2c3ea2a4
 ---
 apiVersion: delivery.re8ch.com/v1alpha1
 kind: StaticRelease
