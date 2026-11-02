@@ -80,6 +80,9 @@ print("storage SSA executor runtime imports are complete")
 
 ceph_workflow = (root / ".github/workflows/ceph-static-release.yml").read_text()
 compiler_workflow = (root / ".github/workflows/ceph-shadow-compile.yml").read_text()
+assert ceph_workflow.count("KUBE_API_SERVER: https://kube-api.re8ch.com") == 2
+assert "KUBE_API_SERVER: 'https://kube-api.re8ch.com'" in ceph_workflow
+assert "10.181.22.147:6443" not in ceph_workflow
 assert (root / "operations/releases/ceph_cloud_request.py").is_file()
 assert "strata-silica/storage-gitops" in (root / "operations/releases/ceph_cloud_request.py").read_text()
 for legacy in (
