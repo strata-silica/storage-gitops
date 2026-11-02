@@ -19,7 +19,7 @@ ISSUER = "https://token.actions.githubusercontent.com"
 PUBLISHER_AUDIENCE = "https://kube-api.re8ch.com/release-artifact-publisher"
 
 SOURCE_RE = re.compile(
-    r"^ghcr\.io/re8ch/(?:release-compat-controller|"
+    r"^ghcr\.io/strata-silica/(?:"
     r"storage-gitops-chart/(?:rook-ceph|ceph-csi-drivers|rook-ceph-cluster)|"
     r"storage-gitops-release/(?:rook-ceph|ceph-csi-drivers|rook-ceph-cluster))$"
 )
