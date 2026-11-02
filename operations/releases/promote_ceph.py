@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Open an App-authored, GitHub-signed PR for one verified Ceph bundle."""
+"""Create a GitHub-signed promotion branch and open its review PR when allowed."""
 from __future__ import annotations
 
 import argparse
@@ -12,6 +12,7 @@ import re
 import sys
 import tempfile
 import urllib.request
+from urllib.error import HTTPError
 from pathlib import Path
 
 import yaml
@@ -87,8 +88,18 @@ def main() -> int:
     commit = result["createCommitOnBranch"]["commit"]["oid"]
     if not api("repos/" + REPO + "/commits/" + commit)["commit"]["verification"]["verified"]:
         raise RuntimeError("promotion commit is not GitHub-verified")
-    pr = api("repos/" + REPO + "/pulls", {"title": f"chore(ceph): promote signed {args.release} bundle",
-        "head": branch, "base": "main", "body": "Promotes one digest-addressed, keyless-signed static Ceph bundle. CI regenerates the exact chart inventory; branch protection remains mandatory."})
+    try:
+        pr = api("repos/" + REPO + "/pulls", {"title": f"chore(ceph): promote signed {args.release} bundle",
+            "head": branch, "base": "main", "body": "Promotes one digest-addressed, keyless-signed static Ceph bundle. CI regenerates the exact chart inventory; branch protection remains mandatory."})
+    except HTTPError as error:
+        if error.code != 403:
+            raise
+        message = f"promotion branch ready for protected review: {branch} ({commit})"
+        print(message)
+        if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(summary, "a", encoding="utf-8") as handle:
+                handle.write(f"## Ceph promotion branch\n\n`{branch}` at `{commit}` is ready for a protected pull request.\n")
+        return 0
     graphql("mutation($input:EnablePullRequestAutoMergeInput!){enablePullRequestAutoMerge(input:$input){pullRequest{number}}}",
             {"input": {"pullRequestId": pr["node_id"], "mergeMethod": "SQUASH"}})
     print(pr["html_url"])
