@@ -2,7 +2,6 @@
 """Renew the current executor credential without passing secrets in process argv."""
 import os
 import argparse
-import base64
 from pathlib import Path
 import tempfile
 
@@ -45,18 +44,12 @@ def refresh() -> None:
 
 
 def initialize() -> None:
-    """Initialize only the fixed API endpoint with a private guarded OIDC credential."""
+    """Initialize the fixed public HTTPS endpoint with a guarded OIDC credential."""
     path = Path(os.environ['KUBECONFIG'])
-    ca = os.environ['KUBE_API_CA']
-    if not ca.strip():
-        raise Rejected('missing Kubernetes CA')
-    server = os.environ.get('KUBE_API_SERVER', 'https://kube-api.re8ch.com')
-    if server not in {'https://kube-api.re8ch.com', 'https://10.181.22.147:6443'}:
+    server = os.environ.get('KUBE_API_SERVER', 'https://kube-api.service.re8ch.com')
+    if server != 'https://kube-api.service.re8ch.com':
         raise Rejected('unexpected Kubernetes API endpoint')
-    cluster = {'server': server,
-               'certificate-authority-data': base64.b64encode(ca.encode()).decode()}
-    if server == 'https://10.181.22.147:6443':
-        cluster['tls-server-name'] = 'kube-api.re8ch.com'
+    cluster = {'server': server}
     config = {'apiVersion': 'v1', 'kind': 'Config',
               'clusters': [{'name': 're8ch-main', 'cluster': cluster}],
               'users': [{'name': 'release-executor', 'user': {}}],

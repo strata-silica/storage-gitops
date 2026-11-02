@@ -51,6 +51,26 @@ class RefreshKubeconfigTest(unittest.TestCase):
                 with self.assertRaisesRegex(Rejected, 'incomplete Actions OIDC'):
                     refresh_kubeconfig.refresh()
 
+    def test_initialize_uses_public_service_https_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'executor.kubeconfig'
+            env = {**self.oidc, 'KUBECONFIG': str(path),
+                   'KUBE_API_SERVER': 'https://kube-api.service.re8ch.com'}
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(refresh_kubeconfig.Executor, 'actions_kube_token', return_value='token'):
+                refresh_kubeconfig.initialize()
+            cluster = yaml.safe_load(path.read_text())['clusters'][0]['cluster']
+            self.assertEqual(cluster, {'server': 'https://kube-api.service.re8ch.com'})
+
+    def test_initialize_rejects_retired_parent_and_private_endpoints(self) -> None:
+        for server in ('https://kube-api.re8ch.com', 'https://10.181.22.147:6443'):
+            with self.subTest(server=server), tempfile.TemporaryDirectory() as directory:
+                env = {**self.oidc, 'KUBECONFIG': str(Path(directory) / 'executor.kubeconfig'),
+                       'KUBE_API_SERVER': server}
+                with mock.patch.dict(os.environ, env, clear=True):
+                    with self.assertRaisesRegex(Rejected, 'unexpected Kubernetes API endpoint'):
+                        refresh_kubeconfig.initialize()
+
 
 if __name__ == '__main__':
     unittest.main()
