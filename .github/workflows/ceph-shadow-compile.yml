@@ -18,6 +18,8 @@ jobs:
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with: {fetch-depth: 0}
+    - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+      with: {version: v3.19.0}
     - uses: fluxcd/flux2/action@dede56a8fdcd1e0edca28630a979a51415bb56f8
       with: {version: '2.9.5'}
     - uses: azure/setup-kubectl@c0c8b32d33a5244f1e5947304550403b63930415 # v4
