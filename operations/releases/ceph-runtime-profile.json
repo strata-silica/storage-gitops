@@ -1,6 +1,6 @@
 {
   "contracts": {
-    "rook-ceph": "sha256:d0c8ac9b74d3b62df81c29bbc241c5ab9d42ed12d8c0af2808f4ae9fb9879296",
+    "rook-ceph": "sha256:83f38c4b2405a334fbb9e1a802905170e207049c52ccc81c92620b69c0cf465c",
     "ceph-csi-drivers": "sha256:fd96d98c84260a4d0035d455db9e470935e3d9737bed826cdaeaa5fa1a15007a",
     "rook-ceph-cluster": "sha256:31890f0673720270757a7c443dd28b9ab75cdd9002f9ce87ba425b2019b496c7"
   },
