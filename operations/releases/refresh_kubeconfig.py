@@ -50,10 +50,15 @@ def initialize() -> None:
     ca = os.environ['KUBE_API_CA']
     if not ca.strip():
         raise Rejected('missing Kubernetes CA')
+    server = os.environ.get('KUBE_API_SERVER', 'https://kube-api.re8ch.com:6443')
+    if server not in {'https://kube-api.re8ch.com:6443', 'https://10.181.22.147:6443'}:
+        raise Rejected('unexpected Kubernetes API endpoint')
+    cluster = {'server': server,
+               'certificate-authority-data': base64.b64encode(ca.encode()).decode()}
+    if server == 'https://10.181.22.147:6443':
+        cluster['tls-server-name'] = 'kube-api.re8ch.com'
     config = {'apiVersion': 'v1', 'kind': 'Config',
-              'clusters': [{'name': 're8ch-main', 'cluster': {
-                  'server': 'https://kube-api.re8ch.com:6443',
-                  'certificate-authority-data': base64.b64encode(ca.encode()).decode()}}],
+              'clusters': [{'name': 're8ch-main', 'cluster': cluster}],
               'users': [{'name': 'release-executor', 'user': {}}],
               'contexts': [{'name': 'release-executor', 'context': {
                   'cluster': 're8ch-main', 'user': 'release-executor'}}],
