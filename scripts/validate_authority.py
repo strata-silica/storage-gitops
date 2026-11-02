@@ -80,6 +80,8 @@ print("storage SSA executor runtime imports are complete")
 
 ceph_workflow = (root / ".github/workflows/ceph-static-release.yml").read_text()
 compiler_workflow = (root / ".github/workflows/ceph-shadow-compile.yml").read_text()
+assert (root / "operations/releases/ceph_cloud_request.py").is_file()
+assert "strata-silica/storage-gitops" in (root / "operations/releases/ceph_cloud_request.py").read_text()
 for legacy in (
     "https://github.com/re8ch/service-backend/.github/workflows/ceph-shadow-compile.yml",
     "oci://ghcr.io/re8ch/service-backend-release/",
