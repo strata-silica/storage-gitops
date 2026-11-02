@@ -38,7 +38,7 @@ jobs:
     - name: Acquire exact infra identity
       env:
         KUBE_API_CA: '${{ secrets.KUBE_API_CA_PEM }}'
-        KUBE_API_SERVER: https://10.181.22.147:6443
+        KUBE_API_SERVER: https://kube-api.re8ch.com
         EXECUTOR_AUDIENCE: https://kube-api.re8ch.com/release-executor-ceph-infra
       run: |
         set -euo pipefail
@@ -147,7 +147,7 @@ jobs:
     - name: Acquire runtime-only identity
       env:
         KUBE_API_CA: '${{ secrets.KUBE_API_CA_PEM }}'
-        KUBE_API_SERVER: https://10.181.22.147:6443
+        KUBE_API_SERVER: https://kube-api.re8ch.com
         EXECUTOR_AUDIENCE: https://kube-api.re8ch.com/release-executor-ceph-runtime
       run: |
         set -euo pipefail
@@ -238,7 +238,7 @@ jobs:
         password: '${{ secrets.GITHUB_TOKEN }}'
     - run: python -m pip install --disable-pip-version-check 'PyYAML>=6.0.2' 'jsonschema>=4.23'
     - name: Acquire final infra identity
-      env: {KUBE_API_CA: '${{ secrets.KUBE_API_CA_PEM }}', KUBE_API_SERVER: 'https://10.181.22.147:6443', EXECUTOR_AUDIENCE: https://kube-api.re8ch.com/release-executor-ceph-infra}
+      env: {KUBE_API_CA: '${{ secrets.KUBE_API_CA_PEM }}', KUBE_API_SERVER: 'https://kube-api.re8ch.com', EXECUTOR_AUDIENCE: https://kube-api.re8ch.com/release-executor-ceph-infra}
       run: |
         set -euo pipefail
         kubeconfig="$RUNNER_TEMP/executor.kubeconfig"
