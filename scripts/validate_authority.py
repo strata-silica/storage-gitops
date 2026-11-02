@@ -22,6 +22,10 @@ assert len(releases) == len(set(releases))
 assert "main-data-storage-supabase-pg-re8ch" not in releases
 print("storage authority declaration is valid")
 
+ceph = spec["domains"]["ceph"]
+assert ceph["disposition"] == "cutover-approved"
+assert ceph["releases"] == ["rook-ceph", "ceph-csi-drivers", "rook-ceph-cluster"]
+
 ruleset = json.loads((root / "governance/github/main-ruleset.json").read_text())
 rule_types = {rule["type"] for rule in ruleset["rules"]}
 assert {"deletion", "non_fast_forward", "required_signatures", "pull_request", "required_status_checks"} <= rule_types
@@ -73,3 +77,23 @@ for path in local_runtime_data:
 sys.path.insert(0, str(root / "operations/releases"))
 import ssa_executor  # noqa: F401,E402
 print("storage SSA executor runtime imports are complete")
+
+ceph_workflow = (root / ".github/workflows/ceph-static-release.yml").read_text()
+compiler_workflow = (root / ".github/workflows/ceph-shadow-compile.yml").read_text()
+for legacy in (
+    "https://github.com/re8ch/service-backend/.github/workflows/ceph-shadow-compile.yml",
+    "oci://ghcr.io/re8ch/service-backend-release/",
+):
+    assert legacy not in ceph_workflow + compiler_workflow
+assert "strata-silica/storage-gitops" in compiler_workflow
+
+runtime_profile = json.loads((root / "operations/releases/ceph-runtime-profile.json").read_text())
+static_releases = {
+    document["metadata"]["name"]: document["spec"]["contractDigest"]
+    for document in yaml.safe_load_all(
+        (root / "clusters/re8ch/components/release-compat/ceph-static-releases.yaml").read_text()
+    )
+}
+assert runtime_profile["contracts"] == static_releases
+assert runtime_profile["execution"]["repository"] == "strata-silica/storage-gitops"
+print("Ceph compiler and split executor identities are bound to storage-gitops")

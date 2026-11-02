@@ -1,4 +1,14 @@
 {
-  "contracts": {},
-  "execution": {}
+  "contracts": {
+    "rook-ceph": "sha256:d0c8ac9b74d3b62df81c29bbc241c5ab9d42ed12d8c0af2808f4ae9fb9879296",
+    "ceph-csi-drivers": "sha256:9dc831d1d2a0f2b9a3279d56f68658f1f70ec6ddcf11fd3d2bf0cf4bbf96f539",
+    "rook-ceph-cluster": "sha256:31890f0673720270757a7c443dd28b9ab75cdd9002f9ce87ba425b2019b496c7"
+  },
+  "execution": {
+    "repository": "strata-silica/storage-gitops",
+    "workflow": ".github/workflows/ceph-static-release.yml",
+    "ref": "refs/heads/main",
+    "environment": "release-executor-ceph-runtime",
+    "audience": "https://kube-api.re8ch.com/release-executor-ceph-runtime"
+  }
 }

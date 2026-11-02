@@ -18,11 +18,15 @@ spec:
     - successful-shadow-validation
   domains:
     ceph:
-      disposition: migrate
+      disposition: cutover-approved
       currentEnvironments:
         - release-ceph-compiler
         - release-executor-ceph-infra
         - release-executor-ceph-runtime
+      releases:
+        - rook-ceph
+        - ceph-csi-drivers
+        - rook-ceph-cluster
     data-storage:
       disposition: migrate
       currentEnvironments:

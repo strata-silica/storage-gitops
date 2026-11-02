@@ -5,9 +5,10 @@ Reviewed GitOps authority for RE8CH storage infrastructure.
 GitHub authority: `strata-silica/storage-gitops`.
 
 This repository is in the **cutover-approved** phase and owns the bounded
-data-storage release contracts. Cluster mutation remains gated by the
-`release-executor-data-storage` Environment, exact GitHub OIDC claims and the
-contract allowlists. Ceph ownership moves only after data-storage verification.
+data-storage release contracts. Ceph compiler and executor declarations are
+also cutover-approved for the three locked Ceph releases. Cluster mutation
+remains gated by protected Environments, exact GitHub OIDC claims and contract
+allowlists.
 
 ## Intended scope
 
