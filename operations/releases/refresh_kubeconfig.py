@@ -50,8 +50,8 @@ def initialize() -> None:
     ca = os.environ['KUBE_API_CA']
     if not ca.strip():
         raise Rejected('missing Kubernetes CA')
-    server = os.environ.get('KUBE_API_SERVER', 'https://kube-api.re8ch.com:6443')
-    if server not in {'https://kube-api.re8ch.com:6443', 'https://10.181.22.147:6443'}:
+    server = os.environ.get('KUBE_API_SERVER', 'https://kube-api.re8ch.com')
+    if server not in {'https://kube-api.re8ch.com', 'https://10.181.22.147:6443'}:
         raise Rejected('unexpected Kubernetes API endpoint')
     cluster = {'server': server,
                'certificate-authority-data': base64.b64encode(ca.encode()).decode()}
