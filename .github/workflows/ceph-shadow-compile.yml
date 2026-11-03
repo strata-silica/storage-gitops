@@ -12,7 +12,7 @@ concurrency: {group: 'ceph-shadow-${{ inputs.release }}', cancel-in-progress: fa
 jobs:
   compile-sign-promote:
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, Linux, X64, r640, untrusted-build]
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: release-ceph-compiler
     steps:
@@ -89,15 +89,13 @@ jobs:
         echo "chart_digest=$chart_digest" >> "$GITHUB_ENV"
     - name: Acquire artifact-publisher identity
       env:
-        KUBE_API_CA: '${{ secrets.KUBE_API_CA_PEM }}'
         EXECUTOR_AUDIENCE: https://kube-api.re8ch.com/release-artifact-publisher
       run: |
         set -euo pipefail
-        printf '%s' "$KUBE_API_CA" > "$RUNNER_TEMP/re8ch-ca.crt"
         curl -fsS --get -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" --data-urlencode "audience=$EXECUTOR_AUDIENCE" "$ACTIONS_ID_TOKEN_REQUEST_URL" > "$RUNNER_TEMP/oidc.json"
         token="$(jq -r .value "$RUNNER_TEMP/oidc.json")"; echo "::add-mask::$token"
         kubeconfig="$RUNNER_TEMP/publisher.kubeconfig"
-        kubectl config --kubeconfig "$kubeconfig" set-cluster re8ch --server=https://10.181.22.147:6443 --tls-server-name=kube-api.re8ch.com --certificate-authority="$RUNNER_TEMP/re8ch-ca.crt" --embed-certs=true
+        kubectl config --kubeconfig "$kubeconfig" set-cluster re8ch --server=https://kube-api.service.re8ch.com
         kubectl config --kubeconfig "$kubeconfig" set-credentials publisher --token="$token"
         kubectl config --kubeconfig "$kubeconfig" set-context publisher --cluster=re8ch --user=publisher --namespace=flux-system
         kubectl config --kubeconfig "$kubeconfig" use-context publisher

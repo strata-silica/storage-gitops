@@ -40,10 +40,11 @@ print("GitHub governance declarations are valid")
 
 release = (root / ".github/workflows/storage-static-release.yml").read_text()
 assert "inputs.contract" in release and "inputs.execute" in release
-assert "macmini-a1, trusted-audit" in release
-assert "10.181.22.147:6443" in release
-assert "--tls-server-name=kube-api.re8ch.com" in release
-assert "ExitOnForwardFailure=yes" in release
+assert "--server=https://kube-api.service.re8ch.com" in release
+assert "ssh -M" not in release
+for workflow_path in (root / ".github/workflows").glob("*.yml"):
+    for job in yaml.safe_load(workflow_path.read_text())["jobs"].values():
+        assert job.get("runs-on") == "ubuntu-24.04", workflow_path
 assert "--retry-all-errors" in release and "--connect-timeout 10" in release
 assert "jq -er '.value | strings | select(length > 0)'" in release
 assert "operations/releases/ssa_executor.py" in release

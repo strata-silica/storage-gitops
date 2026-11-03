@@ -18,7 +18,7 @@ concurrency:
 jobs:
   validate:
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, Linux, X64, r640, untrusted-build]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {contents: read}
     outputs:
@@ -46,7 +46,7 @@ jobs:
   compile-sign:
     if: github.ref == 'refs/heads/main' && inputs.mode != 'reconcile'
     needs: validate
-    runs-on: [self-hosted, Linux, X64, r640, untrusted-build]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: ${{ needs.validate.outputs.environment }}
     permissions: {contents: read, id-token: write, packages: write}
@@ -126,7 +126,7 @@ jobs:
       ((inputs.mode == 'reconcile' && needs.compile-sign.result == 'skipped') ||
       (inputs.mode != 'reconcile' && needs.compile-sign.result == 'success'))
     needs: [validate, compile-sign]
-    runs-on: [self-hosted, macOS, ARM64, macmini-a1, trusted-audit]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: ${{ needs.validate.outputs.environment }}
     permissions: {contents: read, id-token: write, packages: read}
@@ -156,25 +156,17 @@ jobs:
       - run: python -m pip install --disable-pip-version-check 'PyYAML>=6.0.2' 'jsonschema>=4.23'
       - name: Acquire exact OIDC identity and prove denials
         env:
-          KUBE_API_CA: '${{ secrets.KUBE_API_CA_PEM }}'
           RELEASE_ID: '${{ needs.validate.outputs.release-id }}'
           TARGET_NAMESPACE: '${{ needs.validate.outputs.namespace }}'
         run: |
           set -euo pipefail
-          printf '%s' "$KUBE_API_CA" > "$RUNNER_TEMP/re8ch-ca.crt"
           curl -fsS --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 10 --max-time 90 \
             --get -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" --data-urlencode "audience=$EXECUTOR_AUDIENCE" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL" > "$RUNNER_TEMP/oidc.json"
           token="$(jq -er '.value | strings | select(length > 0)' "$RUNNER_TEMP/oidc.json")"; echo "::add-mask::$token"
           echo "EXECUTOR_INITIAL_TOKEN_ISSUED_AT=$(date +%s)" >> "$GITHUB_ENV"
-          tunnel_port=$((20000 + GITHUB_RUN_ID % 20000))
-          tunnel_socket="$RUNNER_TEMP/kube-api-tunnel.sock"
-          ssh -M -S "$tunnel_socket" -f -N -o BatchMode=yes -o ExitOnForwardFailure=yes \
-            -L "127.0.0.1:${tunnel_port}:10.181.22.147:6443" r640
-          ssh -S "$tunnel_socket" -O check r640
           kubeconfig="$RUNNER_TEMP/executor.kubeconfig"
-          kubectl config --kubeconfig "$kubeconfig" set-cluster re8ch-main --server="https://127.0.0.1:${tunnel_port}" \
-            --tls-server-name=kube-api.re8ch.com --certificate-authority="$RUNNER_TEMP/re8ch-ca.crt" --embed-certs=true
+          kubectl config --kubeconfig "$kubeconfig" set-cluster re8ch-main --server=https://kube-api.service.re8ch.com
           kubectl config --kubeconfig "$kubeconfig" set-credentials release-executor --token="$token"
           kubectl config --kubeconfig "$kubeconfig" set-context release-executor --cluster=re8ch-main --user=release-executor
           kubectl config --kubeconfig "$kubeconfig" use-context release-executor
@@ -246,8 +238,3 @@ jobs:
         if: always()
         continue-on-error: true
         with: {name: 'main-domain-release-result-${{ github.run_id }}', path: "${{ runner.temp }}/result.json\n${{ runner.temp }}/workflow-failure.json", retention-days: 30, if-no-files-found: warn}
-      - name: Close Kubernetes API tunnel
-        if: always()
-        run: |
-          socket="$RUNNER_TEMP/kube-api-tunnel.sock"
-          if [[ -S "$socket" ]]; then ssh -S "$socket" -O exit r640; fi
