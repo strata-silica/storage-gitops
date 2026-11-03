@@ -45,7 +45,7 @@ def replay_state(configmap: Path, contract_path: Path) -> tuple[dict, dict, str]
     validate_schema(state, "release-accepted-state.schema.json")
     if state["releaseId"] != release_id:
         raise ValueError("accepted state belongs to another release")
-    expected = f"oci://ghcr.io/re8ch/service-backend-release/{release_id}"
+    expected = f"oci://ghcr.io/strata-silica/storage-gitops-release/{release_id}"
     if state["bundleReference"] != expected:
         raise ValueError("accepted bundle is outside the main-domain repository")
     if state["inventoryDigest"] != contract["spec"]["inventory"]["digest"]:
