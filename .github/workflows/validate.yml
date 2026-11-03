@@ -7,10 +7,7 @@ permissions:
   contents: read
 jobs:
   authority:
-    # Enterprise R640 runners are isolated for untrusted/offline build work.
-    # The Macmini remains a service-backend repository runner until it is
-    # deliberately re-registered at enterprise scope.
-    runs-on: [self-hosted, Linux, X64, r640, untrusted-build]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - run: python -m pip install --disable-pip-version-check 'PyYAML>=6.0.2'
