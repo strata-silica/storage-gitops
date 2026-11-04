@@ -7,3 +7,5 @@
 - Preserve exact release digests, namespaces, field managers and accepted state during migration.
 - One resource may never have writers from both repositories.
 - Runtime Anatomy belongs here only when the probe is storage-specific.
+
+- Before using RE8CH self-service or platform tools, read [docs/RE8CH-TOOLS.md](docs/RE8CH-TOOLS.md) and discover the current authenticated catalog.
