@@ -307,7 +307,7 @@ class Executor:
                 raise Rejected("replay identity permits only unforced reconcile")
             if not state or state.get("releaseId") != operation["releaseId"] or state.get("healthyDigest") != state.get("appliedDigest"):
                 raise Rejected("replay identity requires healthy accepted state")
-            expected = f"oci://ghcr.io/re8ch/service-backend-release/{operation['releaseId']}"
+            expected = f"oci://ghcr.io/strata-silica/storage-gitops-release/{operation['releaseId']}"
             if (state["bundleReference"] != expected or operation["bundle"]["reference"] != expected
                     or operation["bundle"]["digest"] != state["appliedDigest"]
                     or operation["bundle"]["payloadDigest"] != state["payloadDigest"]
