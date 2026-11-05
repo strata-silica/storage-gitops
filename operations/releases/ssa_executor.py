@@ -379,8 +379,13 @@ class Executor:
 
     def replay_drift(self, item: dict, manager: str) -> bool:
         # Bind the dry-run to the live read so a concurrent edit fails closed.
-        live = json.loads(self.command(
-            ["kubectl", "get", "-f", "-", "-o", "json"], json.dumps(item)).stdout)
+        group = item["apiVersion"].partition("/")[0] if "/" in item["apiVersion"] else ""
+        resource = item["kind"] + ("." + group if group else "")
+        target = item["metadata"]
+        argv = ["kubectl", "get", resource, target["name"], "-o", "json"]
+        if target.get("namespace"):
+            argv += ["-n", target["namespace"]]
+        live = json.loads(self.command(argv).stdout)
         desired = {**item, "metadata": {**item["metadata"],
                                        "resourceVersion": live["metadata"]["resourceVersion"]}}
         projected = json.loads(self.command(
