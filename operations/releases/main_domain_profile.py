@@ -20,6 +20,11 @@ def profiles() -> dict[str, dict]:
         "protectedEnvironment": "release-executor-data-storage",
         "audience": "https://kube-api.re8ch.com/release-executor-data-storage",
         "kubernetesGroup": "github-actions:release-executor-data-storage",
+        "replay": {
+            "workflow": ".github/workflows/storage-reconcile.yml",
+            "environment": "release-reconciler-data-storage",
+            "audience": "https://kube-api.re8ch.com/release-reconciler-data-storage",
+        },
     }}}
 
 
@@ -77,7 +82,7 @@ def replay_provenance(contract: dict) -> dict[str, str] | None:
     spec = contract["spec"]
     execution = profiles().get(spec.get("authorityDomain"), {}).get("execution", {})
     replay = execution.get("replay")
-    if not replay or execution.get("repository") != "re8ch/service-backend":
+    if not replay or contract["metadata"]["name"] != "main-data-storage-toolhive-system":
         return None
     original = spec["provenance"]
     expected = {"repository": execution["repository"], "workflow": execution["workflow"],
