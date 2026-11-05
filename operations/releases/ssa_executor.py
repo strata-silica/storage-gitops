@@ -16,6 +16,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -376,6 +377,22 @@ class Executor:
                     if not require_existing or attempt == 2 or not resource_version_conflict(str(error)):
                         raise
 
+    def replay_drift(self, item: dict, manager: str) -> bool:
+        # Bind the dry-run to the live read so a concurrent edit fails closed.
+        live = json.loads(self.command(
+            ["kubectl", "get", "-f", "-", "-o", "json"], json.dumps(item)).stdout)
+        desired = {**item, "metadata": {**item["metadata"],
+                                       "resourceVersion": live["metadata"]["resourceVersion"]}}
+        projected = json.loads(self.command(
+            ["kubectl", "apply", "--server-side", "--dry-run=server",
+             f"--field-manager={manager}", "-f", "-", "-o", "json"],
+            json.dumps(desired), timeout=120).stdout)
+        for obj in (live, projected):
+            obj.pop("status", None)
+            for key in ("managedFields", "resourceVersion", "generation"):
+                obj["metadata"].pop(key, None)
+        return projected != live
+
     @staticmethod
     def pointer(value: object, pointer: str) -> object:
         current = value
@@ -651,12 +668,21 @@ class Executor:
             self.failure_stage = "server-side-dry-run"
             self.apply(stage_objects, manager, dry_run=True, force_objects=requested_force,
                        require_existing=contract["spec"]["authorization"].get("requireExisting", False))
+        replay = replay_provenance(contract)
+        compare = replay and operation["github"]["workflow"] == replay["workflow"]
+        if compare:
+            self.failure_stage = "compare-managed-fields"
+            changed = {object_identity(item) for item in selected_objects if self.replay_drift(item, manager)}
+            print(f"Accepted bundle comparison: {len(changed)} of {len(selected_objects)} objects drifted",
+                  file=sys.stderr)
         attempted_inventory, applied_inventory = [], []
         command_timed_out = False
         try:
             self.failure_stage = "server-side-apply"
             for stage in stages:
                 for identity in stage["inventory"]:
+                    if compare and identity not in changed:
+                        continue
                     attempted_inventory.append(identity)
                     self.apply([by_identity[identity]], manager, dry_run=False, force_objects=requested_force,
                                require_existing=contract["spec"]["authorization"].get("requireExisting", False))
@@ -670,6 +696,10 @@ class Executor:
             healthy, reason = False, "Kubernetes command timed out; write or health outcome unknown"
         except Rejected as error:
             healthy, reason = False, f"apply failed: {error}"
+        if healthy and compare:
+            self.failure_stage = "readback-managed-fields"
+            if any(self.replay_drift(item, manager) for item in selected_objects):
+                raise Rejected("managed fields still differ after replay")
         outcome = "healthy"
         rollback_digest = None
         if not healthy:
