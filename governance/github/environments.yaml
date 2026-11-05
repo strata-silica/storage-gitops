@@ -6,6 +6,9 @@ spec:
   deploymentBranches: [main]
   preventSelfReview: false
   requiredReviewers: [Woomou]
+  overrides:
+    release-reconciler-data-storage:
+      requiredReviewers: []
   secrets: []
   environments:
     - release-ceph-compiler
