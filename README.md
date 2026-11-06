@@ -41,3 +41,15 @@ machine-readable ownership boundary.
 GitHub-native governance is declared under `governance/github/`. Effective
 repository settings must be applied with `gh api` after review and read back
 from GitHub; committing the declarations alone does not enforce them.
+
+## Independent SSA and Observe actions
+
+Reconcile reports SSA execution and runtime observation separately. The SSA step
+validates authorization and the signed accepted artifact, performs server-side
+dry-run and apply, then records `outcome: applied` and `acceptedDigest`. It does
+not claim a healthy runtime. The following read-only Observe step publishes a
+separate observation artifact and records healthy, degraded or unknown health.
+Runtime health does not fail SSA, lock the release or trigger rollback. Signature,
+authorization, field ownership and API write failures remain execution failures.
+Legacy `healthyDigest` is only a fallback for older accepted records; new replay
+authorization uses the explicitly accepted digest without inventing health proof.
