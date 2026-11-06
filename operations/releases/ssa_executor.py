@@ -845,6 +845,7 @@ def main() -> int:
         parser.error("--no-stage-apply cannot be combined with --partial")
     operation = None
     executor = Executor()
+    executor.apply_only = args.apply_only
     started = dt.datetime.now(dt.timezone.utc).isoformat()
     try:
         contract = yaml.safe_load(args.contract.read_text())
