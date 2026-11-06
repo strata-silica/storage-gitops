@@ -9,6 +9,7 @@ persists accepted state, and prunes only explicitly authorized stale objects.
 from __future__ import annotations
 
 import argparse
+from ssa_compare import retry_read_conflict
 import contextlib
 import datetime as dt
 import fcntl
@@ -379,6 +380,9 @@ class Executor:
                         raise
 
     def replay_drift(self, item: dict, manager: str) -> bool:
+        return retry_read_conflict(lambda: self._replay_drift_once(item, manager))
+
+    def _replay_drift_once(self, item: dict, manager: str) -> bool:
         # Bind the dry-run to the live read so a concurrent edit fails closed.
         group = item["apiVersion"].partition("/")[0] if "/" in item["apiVersion"] else ""
         resource = item["kind"] + ("." + group if group else "")
