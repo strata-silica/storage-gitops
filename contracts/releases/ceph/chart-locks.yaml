@@ -49,7 +49,7 @@ charts:
   - ceph-csi-drivers
   values:
   - path: clusters/re8ch/components/rook-ceph/cluster-values.yaml
-    sha256: sha256:09721dcb992c30249b117c8fed7128f2b788ba4727e3c181c5cf60af7d5f385e
+    sha256: sha256:6cc9353a22b080155ba9290624301f3e95c8fec2fe2d55a73eb7777892b84de9
   - path: clusters/re8ch/components/rook-ceph/cluster-values-production-encrypted.yaml
     sha256: sha256:4fd9c352e2712b5b68e5326570ee86c1ef8cc36f443f56d07c93740b724c6679
   images:
