@@ -174,14 +174,13 @@ jobs:
         python operations/releases/ceph_operation.py --resource "$RUNNER_TEMP/operation-resource.json" --static-release "$RUNNER_TEMP/static-release.json" \
           --contract "contracts/releases/ceph/${RELEASE}.yaml" --metadata "$RUNNER_TEMP/bundle/bundle-metadata.json" \
           --state-dir "$RUNNER_TEMP/state" --output "$RUNNER_TEMP/operation.json"
-    - name: Apply runtime and Ceph custom-resource stages
+    - name: Apply runtime workload stage
       if: needs.infra.outputs.action == 'reconcile' || needs.infra.outputs.action == 'force-reconcile' || needs.infra.outputs.action == 'rollback'
       env: {RELEASE: '${{ needs.infra.outputs.release }}', ACTION: '${{ needs.infra.outputs.action }}'}
       run: |
         set -euo pipefail
         args=()
-        stages=(runtime custom-resources)
-        if [[ "$ACTION" == rollback ]]; then stages=(runtime); fi
+        stages=(runtime)
         for stage in "${stages[@]}"; do
           if jq -e --arg stage "$stage" '.stages[] | select(.name == $stage)' "$RUNNER_TEMP/bundle/bundle-metadata.json" >/dev/null; then
             args+=(--stage "$stage")
@@ -200,7 +199,24 @@ jobs:
             > "$RUNNER_TEMP/result.json"
         fi
         python operations/releases/refresh_kubeconfig.py
-        python operations/releases/ceph_health.py --release "$RELEASE" > "$RUNNER_TEMP/ceph-health.json"
+    - name: Apply Ceph custom-resource stage
+      if: needs.infra.outputs.action == 'reconcile' || needs.infra.outputs.action == 'force-reconcile'
+      env: {RELEASE: '${{ needs.infra.outputs.release }}'}
+      run: |
+        set -euo pipefail
+        if jq -e '.stages[] | select(.name == "custom-resources")' "$RUNNER_TEMP/bundle/bundle-metadata.json" >/dev/null; then
+          python operations/releases/ssa_executor.py --contract "contracts/releases/ceph/${RELEASE}.yaml" --operation "$RUNNER_TEMP/operation.json" \
+            --bundle "$RUNNER_TEMP/bundle/release.bundle" --state-dir "$RUNNER_TEMP/state" --stage custom-resources --partial > "$RUNNER_TEMP/ceph-result.json"
+        else
+          jq -n --arg operation "$(jq -r .metadata.uid "$RUNNER_TEMP/operation-resource.json")" --arg release "$RELEASE" \
+            '{apiVersion:"delivery.re8ch.com/stage-result/v1alpha1",operationId:$operation,releaseId:$release,stages:[],outcome:"healthy",health:{status:"healthy",reason:"bundle has no Ceph custom-resource stage"}}' \
+            > "$RUNNER_TEMP/ceph-result.json"
+        fi
+        python operations/releases/refresh_kubeconfig.py
+    - name: Observe Ceph health
+      if: needs.infra.outputs.action == 'reconcile' || needs.infra.outputs.action == 'force-reconcile' || needs.infra.outputs.action == 'rollback'
+      env: {RELEASE: '${{ needs.infra.outputs.release }}'}
+      run: python operations/releases/ceph_health.py --release "$RELEASE" > "$RUNNER_TEMP/ceph-health.json"
     - name: Preserve workflow failure evidence
       if: failure()
       run: |
@@ -211,6 +227,7 @@ jobs:
         name: 'ceph-runtime-${{ github.run_id }}'
         path: |
           ${{ runner.temp }}/result.json
+          ${{ runner.temp }}/ceph-result.json
           ${{ runner.temp }}/ceph-health.json
           ${{ runner.temp }}/workflow-failure.json
         retention-days: 30
