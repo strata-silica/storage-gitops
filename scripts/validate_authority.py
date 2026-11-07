@@ -44,7 +44,11 @@ assert "--server=https://kube-api.service.re8ch.com" in release
 assert "ssh -M" not in release
 for workflow_path in (root / ".github/workflows").glob("*.yml"):
     for job in yaml.safe_load(workflow_path.read_text())["jobs"].values():
-        assert job.get("runs-on") == "ubuntu-24.04", workflow_path
+        runner = job.get("runs-on")
+        if workflow_path.name == "ceph-shadow-compile.yml":
+            assert runner == ["self-hosted", "Linux", "X64", "r640", "untrusted-build"], workflow_path
+        else:
+            assert runner == "ubuntu-24.04", workflow_path
 assert "--retry-all-errors" in release and "--connect-timeout 10" in release
 assert "jq -er '.value | strings | select(length > 0)'" in release
 assert "operations/releases/ssa_executor.py" in release
