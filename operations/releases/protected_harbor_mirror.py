@@ -165,7 +165,10 @@ def run(job: dict) -> None:
     operation_id = job["metadata"]["annotations"]["delivery.re8ch.com/operation-id"]
     existing, _ = read_job(job_name, operation_id)
     if existing is None:
-        subprocess.run(["kubectl", "create", "-f", "-"], input=json.dumps(job), text=True, check=True)
+    # The public API endpoint does not expose authenticated OpenAPI discovery to
+    # this narrow publisher identity. Keep Kubernetes server-side validation and
+    # RBAC authoritative instead of failing on kubectl's optional schema fetch.
+    subprocess.run(["kubectl", "create", "--validate=false", "-f", "-"], input=json.dumps(job), text=True, check=True)
     deadline = time.monotonic() + 900
     last_error = ""
     while time.monotonic() < deadline:
