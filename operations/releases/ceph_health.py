@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import time
 
 
 def command(*argv: str) -> dict:
@@ -15,6 +16,31 @@ def command(*argv: str) -> dict:
 def require(value: bool, message: str) -> None:
     if not value:
         raise SystemExit(message)
+
+
+def converged_ceph_status(timeout_seconds: int = 300, interval_seconds: int = 10) -> tuple[dict, int]:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            ceph = command("kubectl", "-n", "rook-ceph", "exec", "deploy/rook-ceph-tools", "--", "ceph", "status", "--format", "json")
+            osd = ceph.get("osdmap", {})
+            pg = ceph.get("pgmap", {})
+            clean = sum(item.get("count", 0) for item in pg.get("pgs_by_state", []) if item.get("state_name") == "active+clean")
+            ready = (
+                ceph.get("monmap", {}).get("num_mons") == len(ceph.get("quorum", [])) == 1
+                and osd.get("num_osds", 0) > 0
+                and osd.get("num_up_osds") == osd.get("num_osds")
+                and osd.get("num_in_osds") == osd.get("num_osds")
+                and pg.get("num_pgs", 0) > 0
+                and clean == pg.get("num_pgs")
+            )
+            if ready:
+                return ceph, clean
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError):
+            pass
+        if time.monotonic() >= deadline:
+            raise SystemExit("Ceph status did not converge before the observation timeout")
+        time.sleep(interval_seconds)
 
 
 def main() -> int:
@@ -35,13 +61,8 @@ def main() -> int:
     for item in node_plugins:
         status = item.get("status", {})
         require(status.get("numberReady", 0) == status.get("desiredNumberScheduled", -1), f'node plugin not ready: {item["metadata"]["name"]}')
-    ceph = command("kubectl", "-n", "rook-ceph", "exec", "deploy/rook-ceph-tools", "--", "ceph", "status", "--format", "json")
-    require(ceph.get("monmap", {}).get("num_mons") == len(ceph.get("quorum", [])) == 1, "single MON quorum is not healthy")
+    ceph, clean = converged_ceph_status()
     osd = ceph.get("osdmap", {})
-    require(osd.get("num_osds", 0) > 0 and osd.get("num_up_osds") == osd.get("num_osds") and osd.get("num_in_osds") == osd.get("num_osds"), "OSDs are not all up/in")
-    pg = ceph.get("pgmap", {})
-    clean = sum(item.get("count", 0) for item in pg.get("pgs_by_state", []) if item.get("state_name") == "active+clean")
-    require(pg.get("num_pgs", 0) > 0 and clean == pg.get("num_pgs"), "PGs are not all active+clean")
     for smoke_name in ("rbd-smoke", "cephfs-smoke"):
         pvc = command("kubectl", "get", "persistentvolumeclaim", smoke_name, "-n", "ceph-storage-smoke", "-o", "json")
         smoke = command("kubectl", "get", "deployment", smoke_name, "-n", "ceph-storage-smoke", "-o", "json")
