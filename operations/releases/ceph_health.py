@@ -18,24 +18,32 @@ def require(value: bool, message: str) -> None:
         raise SystemExit(message)
 
 
-def converged_ceph_status(timeout_seconds: int = 300, interval_seconds: int = 10) -> tuple[dict, int]:
+def daemon_count(cluster: dict, daemon: str) -> int:
+    versions = cluster.get("status", {}).get("ceph", {}).get("versions", {}).get(daemon, {})
+    return sum(versions.values())
+
+
+def converged_ceph_status(timeout_seconds: int = 300, interval_seconds: int = 10) -> tuple[dict, dict, dict]:
     deadline = time.monotonic() + timeout_seconds
     while True:
         try:
-            ceph = command("kubectl", "-n", "rook-ceph", "exec", "deploy/rook-ceph-tools", "--", "ceph", "status", "--format", "json")
-            osd = ceph.get("osdmap", {})
-            pg = ceph.get("pgmap", {})
-            clean = sum(item.get("count", 0) for item in pg.get("pgs_by_state", []) if item.get("state_name") == "active+clean")
+            cluster = command("kubectl", "get", "cephcluster", "rook-ceph", "-n", "rook-ceph", "-o", "json")
+            filesystem = command("kubectl", "get", "cephfilesystem", "re8ch-files", "-n", "rook-ceph", "-o", "json")
+            pool = command("kubectl", "get", "cephblockpool", "r640-rbd", "-n", "rook-ceph", "-o", "json")
+            status = cluster.get("status", {})
+            ceph = status.get("ceph", {})
             ready = (
-                ceph.get("monmap", {}).get("num_mons") == len(ceph.get("quorum", [])) == 1
-                and osd.get("num_osds", 0) > 0
-                and osd.get("num_up_osds") == osd.get("num_osds")
-                and osd.get("num_in_osds") == osd.get("num_osds")
-                and pg.get("num_pgs", 0) > 0
-                and clean == pg.get("num_pgs")
+                status.get("phase") == "Ready"
+                and any(item.get("type") == "Ready" and item.get("status") == "True" for item in status.get("conditions", []))
+                and ceph.get("health") in {"HEALTH_OK", "HEALTH_WARN"}
+                and daemon_count(cluster, "mon") >= 1
+                and daemon_count(cluster, "osd") >= 1
+                and filesystem.get("status", {}).get("phase") == "Ready"
+                and filesystem.get("status", {}).get("activeMDS", 0) >= 1
+                and pool.get("status", {}).get("phase") == "Ready"
             )
             if ready:
-                return ceph, clean
+                return cluster, filesystem, pool
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError):
             pass
         if time.monotonic() >= deadline:
@@ -61,14 +69,15 @@ def main() -> int:
     for item in node_plugins:
         status = item.get("status", {})
         require(status.get("numberReady", 0) == status.get("desiredNumberScheduled", -1), f'node plugin not ready: {item["metadata"]["name"]}')
-    ceph, clean = converged_ceph_status()
-    osd = ceph.get("osdmap", {})
+    cluster, filesystem, pool = converged_ceph_status()
     for smoke_name in ("rbd-smoke", "cephfs-smoke"):
         pvc = command("kubectl", "get", "persistentvolumeclaim", smoke_name, "-n", "ceph-storage-smoke", "-o", "json")
         smoke = command("kubectl", "get", "deployment", smoke_name, "-n", "ceph-storage-smoke", "-o", "json")
         require(pvc.get("status", {}).get("phase") == "Bound", f"{smoke_name} PVC is not Bound")
         require(smoke.get("status", {}).get("readyReplicas", 0) >= 1, f"{smoke_name} read/write smoke is not ready")
-    evidence.update({"monQuorum": 1, "osdUpIn": osd["num_osds"], "pgActiveClean": clean,
+    evidence.update({"cephHealth": cluster["status"]["ceph"]["health"],
+                     "monDaemons": daemon_count(cluster, "mon"), "osdDaemons": daemon_count(cluster, "osd"),
+                     "filesystem": filesystem["status"]["phase"], "blockPool": pool["status"]["phase"],
                      "csiNodePlugins": len(node_plugins), "rbdSmoke": "ready", "cephfsSmoke": "ready"})
     print(json.dumps(evidence, sort_keys=True))
     return 0
