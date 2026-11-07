@@ -38,8 +38,8 @@ def converged_ceph_status(timeout_seconds: int = 300, interval_seconds: int = 10
                 and ceph.get("health") in {"HEALTH_OK", "HEALTH_WARN"}
                 and daemon_count(cluster, "mon") >= 1
                 and daemon_count(cluster, "osd") >= 1
+                and daemon_count(cluster, "mds") >= 1
                 and filesystem.get("status", {}).get("phase") == "Ready"
-                and filesystem.get("status", {}).get("activeMDS", 0) >= 1
                 and pool.get("status", {}).get("phase") == "Ready"
             )
             if ready:
@@ -77,6 +77,7 @@ def main() -> int:
         require(smoke.get("status", {}).get("readyReplicas", 0) >= 1, f"{smoke_name} read/write smoke is not ready")
     evidence.update({"cephHealth": cluster["status"]["ceph"]["health"],
                      "monDaemons": daemon_count(cluster, "mon"), "osdDaemons": daemon_count(cluster, "osd"),
+                     "mdsDaemons": daemon_count(cluster, "mds"),
                      "filesystem": filesystem["status"]["phase"], "blockPool": pool["status"]["phase"],
                      "csiNodePlugins": len(node_plugins), "rbdSmoke": "ready", "cephfsSmoke": "ready"})
     print(json.dumps(evidence, sort_keys=True))
