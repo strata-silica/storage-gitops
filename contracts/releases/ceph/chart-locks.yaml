@@ -54,5 +54,5 @@ charts:
     sha256: sha256:4fd9c352e2712b5b68e5326570ee86c1ef8cc36f443f56d07c93740b724c6679
   images:
     quay.io/ceph/ceph:v20.2.2: quay.io/ceph/ceph@sha256:6b4b5ae33acd3d736eb26d2a19238bce71a22f9cfb99cca887ba6312d0957644
-  mirrorDigest: sha256:4126afee4dbaa6e2abccf081eb707e5b7701026b9a21c9fcf9855edc728127bb
-  bundleDigest: sha256:995854515cbe622ec0419f27e0470dcc138fee17c0f78994d34e79c6a9f6c9ce
+  mirrorDigest: sha256:7d745ffe8ca0189a4850951fc63526878d7187935b004a13043e2c685e3cb650
+  bundleDigest: sha256:42ba78abf655ff65ce65a4a38167debf0c310f37e3221350a9fbbc87ade9aaea

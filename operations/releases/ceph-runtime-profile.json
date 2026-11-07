@@ -2,7 +2,7 @@
   "contracts": {
     "rook-ceph": "sha256:83f38c4b2405a334fbb9e1a802905170e207049c52ccc81c92620b69c0cf465c",
     "ceph-csi-drivers": "sha256:fd96d98c84260a4d0035d455db9e470935e3d9737bed826cdaeaa5fa1a15007a",
-    "rook-ceph-cluster": "sha256:94ace2a29473bc8c4a46856697eeb706f2a9d821eb0544b39a970c251c108546"
+    "rook-ceph-cluster": "sha256:b383d25290374275880c68c4683d1e49ad31ec030a111fdabd6dc7a2363297dc"
   },
   "execution": {
     "repository": "strata-silica/storage-gitops",
