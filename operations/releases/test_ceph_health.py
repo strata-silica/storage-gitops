@@ -10,8 +10,8 @@ import ceph_health
 
 class CephHealthTest(unittest.TestCase):
     cluster = {"status": {"phase": "Ready", "conditions": [{"type": "Ready", "status": "True"}],
-                          "ceph": {"health": "HEALTH_WARN", "versions": {"mon": {"v": 1}, "osd": {"v": 1}}}}}
-    filesystem = {"status": {"phase": "Ready", "activeMDS": 1}}
+                          "ceph": {"health": "HEALTH_WARN", "versions": {"mon": {"v": 1}, "osd": {"v": 1}, "mds": {"v": 1}}}}}
+    filesystem = {"status": {"phase": "Ready"}}
     pool = {"status": {"phase": "Ready"}}
 
     def test_observation_retries_transient_exec_failure(self) -> None:
@@ -24,7 +24,7 @@ class CephHealthTest(unittest.TestCase):
         sleep.assert_called_once_with(1)
 
     def test_observation_times_out_without_ready_filesystem(self) -> None:
-        filesystem = {"status": {"phase": "Progressing", "activeMDS": 0}}
+        filesystem = {"status": {"phase": "Progressing"}}
         with mock.patch.object(ceph_health, "command", side_effect=[self.cluster, filesystem, self.pool]), \
                 mock.patch.object(ceph_health.time, "monotonic", side_effect=[0, 2]), \
                 mock.patch.object(ceph_health.time, "sleep"):
