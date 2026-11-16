@@ -15,6 +15,8 @@ Private workflow badges require repository access.
 
 Reviewed GitOps authority for RE8CH storage infrastructure.
 
+For reconcile incidents, use the local [GitHub-ops debugging notes](docs/GITHUB_OPS_RECONCILE_DEBUGGING.md) and the authoritative cross-domain runbook linked there.
+
 GitHub authority: `strata-silica/storage-gitops`.
 
 This repository is in the **cutover-approved** phase and owns the bounded

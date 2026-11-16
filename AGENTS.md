@@ -7,5 +7,6 @@
 - Preserve exact release digests, namespaces, field managers and accepted state during migration.
 - One resource may never have writers from both repositories.
 - Runtime Anatomy belongs here only when the probe is storage-specific.
+- Diagnose reconcile failures with [docs/GITHUB_OPS_RECONCILE_DEBUGGING.md](docs/GITHUB_OPS_RECONCILE_DEBUGGING.md). Verify the dedicated data-storage OIDC group, exact accepted-state object and storage namespace permissions; do not substitute another domain identity.
 
 - Before using RE8CH self-service or platform tools, read [docs/RE8CH-TOOLS.md](docs/RE8CH-TOOLS.md) and discover the current authenticated catalog.
