@@ -3,6 +3,17 @@ on:
   pull_request:
   push:
     branches: [main]
+    paths-ignore:
+      - site/**
+      - README.md
+      - AGENTS.md
+      - docs/CROSS-ORG-CONTEXT.md
+      - docs/RUNTIME-CONTEXT.md
+      - governance/cross-org-context.json
+      - .github/ISSUE_TEMPLATE/**
+      - .github/PULL_REQUEST_TEMPLATE.md
+      - .github/PROJECT_CONTEXT_TEMPLATE.md
+      - .github/workflows/pages.yml
 permissions:
   contents: read
 jobs:
