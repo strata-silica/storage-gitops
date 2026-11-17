@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Runtime observations
+    url: https://github.com/strata-silica/storage-gitops/discussions
+    about: Record changing observations and investigation narratives.
+  - name: Runtime Wiki
+    url: https://github.com/strata-silica/storage-gitops/wiki/Runtime-Context
+    about: Read the sanitized runtime context index.
+  - name: Governance Project
+    url: https://github.com/orgs/8iops/projects/4
+    about: Add requirements to the shared governance context.

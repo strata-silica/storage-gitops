@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://strata-silica.github.io/storage-gitops/sitemap.xml
