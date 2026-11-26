@@ -1,11 +1,8 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
-  - name: Runtime observations
+  - name: Runtime observation or investigation
     url: https://github.com/strata-silica/storage-gitops/discussions
-    about: Record changing observations and investigation narratives.
-  - name: Runtime Wiki
-    url: https://github.com/strata-silica/storage-gitops/wiki/Runtime-Context
-    about: Read the sanitized runtime context index.
-  - name: Governance Project
-    url: https://github.com/orgs/8iops/projects/4
-    about: Add requirements to the shared governance context.
+    about: Put changing observations and investigation narratives in Discussions.
+  - name: Default requirement Project
+    url: https://github.com/orgs/strata-silica/projects/1
+    about: Every actionable Issue must belong to this Project or a narrower approved requirement Project.
